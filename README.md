@@ -61,8 +61,8 @@ flowchart TD
 
 - **渐进式迁移**：网关同时调用 Go RPC 和 Java HTTP，避免一次性重写已有业务。
 - **BFF 聚合**：网关聚合搜索结果、作者资料和互动状态，前端不需要拼装多个服务。
-- **互动读模型**：Redis 使用 Set/Hash 保存点赞、收藏和评分状态；缓存缺失时从 MongoDB 预热，并使用短锁、空值占位和 Bloom Filter 降低穿透与击穿风险。
-- **业务化一致性**：评论关键事件发布失败时回滚写入；点赞等弱一致操作允许短暂偏差，通过异步链路收敛。
+- **互动持久化与缓存**：Go 在 MongoDB 事务中保存互动明细、统计与 Outbox；Redis 使用 Set/Hash 保存短期读模型，缺失时按需回填，使用短锁和空值占位减少并发回源。
+- **业务化一致性**：评论关键事件发布失败时回滚写入；互动事务提交后失效缓存，通过持久化 Outbox 投递通知与搜索刷新任务。
 - **可重建搜索索引**：MongoDB 是内容事实源，ES 是派生读模型；sidecar 以 MongoDB 当前状态决定更新或删除索引。
 - **链路观测**：通过 OpenTelemetry 在 HTTP、gRPC、MQ 间传播 trace 上下文，并接入 Jaeger、Prometheus、Loki 和 Grafana。
 
@@ -189,6 +189,7 @@ Smoke 测试依赖完整集群，不在普通 PR CI 中执行。
 
 ## 文档
 
+- [互动域迁移与切换](docs/interaction_migration.md)
 - [文档导航](docs/README.md)
 - [项目技术总结](docs/resume_project_summary.md)
 - [可观测性](docs/observability.md)
