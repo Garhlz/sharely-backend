@@ -42,9 +42,22 @@ services:
 
   mongo:
     image: mongo:6.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     restart: unless-stopped
     volumes:
       - mongo_data:/data/db
+    networks:
+      - prod-net
+
+  mongo-init:
+    image: mongo:6.0
+    restart: on-failure
+    depends_on:
+      mongo:
+        condition: service_started
+    volumes:
+      - ../scripts/init-mongo-replica.js:/init-replica.js:ro
+    entrypoint: ["mongosh", "mongodb://mongo:27017/?directConnection=true", "/init-replica.js"]
     networks:
       - prod-net
 
@@ -100,6 +113,8 @@ services:
       - ${PROD_ENV_FILE:-./prod.env}
     environment:
       SPRING_PROFILES_ACTIVE: prod
+      SYNC_SIDECAR_URL: http://sync-sidecar:8088
+      SYNC_SIDECAR_TOKEN: ${ADMIN_TOKEN:-change-me}
       TZ: Asia/Shanghai
     restart: unless-stopped
     volumes:
@@ -177,6 +192,8 @@ services:
       TZ: Asia/Shanghai
     restart: unless-stopped
     depends_on:
+      mongo-init:
+        condition: service_completed_successfully
       etcd:
         condition: service_started
       redis:
@@ -223,8 +240,12 @@ services:
       - ${PROD_ENV_FILE:-./prod.env}
     environment:
       TZ: Asia/Shanghai
+      NOTIFICATION_RABBITMQ_URL: amqp://${RABBITMQ_USERNAME:-admin}:${RABBITMQ_PASSWORD:-admin}@mq:5672/
+      NOTIFICATION_MYSQL_DSN: ${NOTIFICATION_MYSQL_DSN:-root:123456@tcp(db:3306)/user_db?charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai}
     restart: unless-stopped
     depends_on:
+      mongo-init:
+        condition: service_completed_successfully
       etcd:
         condition: service_started
       mongo:
