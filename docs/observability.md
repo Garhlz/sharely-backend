@@ -1,105 +1,93 @@
-# 可观测性平台使用指南
+# 可观测性与排障
 
-本指南介绍如何在 Sharely 的可观测性平台（Jaeger、Prometheus、Grafana 和 Loki）中查询调用链、指标与日志。
+本文件合并原 Grafana 面板教程，统一记录当前日志、Trace 与指标入口。启动方式见根目录 [README](../README.md)，验证方式见 [测试](testing.md)。
 
-所有服务（Go RPC 核心服务、网关、Java 单体应用以及 Async/Sync Layer）均已统一接入 OpenTelemetry 和 Loki 收集栈。
+## 入口与配置
 
-## 统一日志与链路字段
+| 组件 | 本地地址 | 用途 |
+|---|---|---|
+| Grafana | http://localhost:3001 | 查询 Prometheus 与 Loki |
+| Prometheus | http://localhost:9091 | 检查采集目标、直接运行 PromQL |
+| Jaeger | http://localhost:16686 | 查看跨服务 Trace |
 
-在排查问题时，请优先使用以下统一字段（Uniform Fields）进行跨服务过滤：
+Grafana 数据源由 [配置](../deploy/grafana/provisioning/datasources/datasources.yml) 自动创建：Prometheus 指向容器内 `http://prometheus:9090`，Loki 指向 `http://loki:3100`，不要填写宿主机映射端口。Dashboard 需自行创建或导入，数据源就绪不代表已有业务面板。
 
-- `service`: 服务名称（例如 `gateway-api`, `user-rpc`, `comment-rpc`, `platform-java`）
-- `traceId`: 全局唯一的分布式追踪 ID，由网关生成并向后透传（HTTP Header, gRPC metadata, MQ properties）
-- `requestId`: HTTP 请求级别的唯一标识（通常与 traceId 相同或为子集）
-- `routingKey`: 针对 MQ 异步事件，使用的 RabbitMQ 路由键（例如 `post.create`, `comment.delete`）
+Go 通过服务配置接入追踪。宿主机 Java 如需完整链路，使用 [OTel 启动脚本](../scripts/run-platform-java-with-otel.sh)；普通 Maven 启动不等同于已加载 Agent。日志收集还依赖 Promtail 的容器发现、Java 日志挂载及实际文件路径。
 
-## 1. 链路追踪 (Jaeger)
+## 排障顺序
 
-Jaeger 用于查看跨服务的请求调用链，分析延迟瓶颈和错误来源。
-本地访问地址：[http://localhost:16686](http://localhost:16686)
+1. 在网关确定接口、响应码、请求标识及失败时间。
+2. 在 Loki 按服务和标识查询，定位 RPC、Java 代理或 MQ 消费错误。
+3. 在 Jaeger 选择对应服务与时间段，检查慢 Span 和错误；只对已采样、已接入的链路有效。
+4. 在 Prometheus 检查目标是否 UP，再看错误率、耗时及缓存回源。
+5. 异步故障继续检查 RabbitMQ 队列与消费者、MongoDB Outbox 和消费凭据，不能仅凭 HTTP 成功判断同步完成。
 
-### 常见查询场景
+常用日志字段为 `service`、`requestId`、`traceId`、`routingKey`。Go 原生日志还可能使用 `trace` 字段；请求标识、自定义 Trace Header 与 OTel Trace ID 不是天然相同的值。
 
-- **HTTP 接口性能分析**
-  - Service: `gateway-api`
-  - Operation: `HTTP GET /api/post/list` 或 `HTTP POST /api/comment/`
-  - Min Duration: 设置例如 `500ms`，查找慢请求。
+## Loki 查询
 
-- **gRPC 调用排查**
-  - Service: 选择对应的下游服务（如 `comment-rpc`）
-  - Operation: 查看具体的 gRPC 方法（如 `comment.CommentService/CreateComment`）。
-  - Tags: 可以输入 `error=true` 过滤出发生异常的调用。
+在 Grafana Explore 中选择 Loki：
 
-- **MQ 异步事件追踪**
-  - `sync-sidecar` 处理帖子同步等 RabbitMQ 消息，Java listener 处理部分评论和互动副作用。
-  - 搜索 Tags：`routingKey=post.create` 可定位从发帖到 ES 索引更新的异步链路。
-
-## 2. 日志查询 (Grafana / Loki)
-
-Loki 用于统一收集和查询结构化日志。
-本地访问地址：[http://localhost:3001](http://localhost:3001)
-
-在 Grafana 中，进入 **Explore** 页面，选择 `Loki` 作为数据源。使用 LogQL (Log Query Language) 进行检索。
-
-### 基础过滤 (Log Stream Selector)
-
-查找特定服务的全部日志：
 ```logql
-{service="comment-rpc"}
+# 单个服务
+{service="gateway-api"}
+
+# 跨服务查找已知标识；.+ 避免选择器匹配空标签
+{service=~".+"} |= "实际请求标识"
+
+# Go JSON 错误日志
+{service="user-rpc"} | json | level="error"
+
+# Java 日志按实际输出文本过滤
+{service="platform-java"} |= "ERROR"
+
+# 异步链路按路由关键词定位，依赖日志确实输出该字段
+{service=~"sync-sidecar|notification-rpc"} |= "post.like"
+
+# 最近五分钟 Go 服务错误日志速率
+sum(rate({service="user-rpc"} | json | level="error" [5m]))
 ```
 
-查找 Java 服务的日志：
-```logql
-{service="platform-java"}
+查不到日志时，先检查时间范围、服务标签及 Promtail 采集状态；不要先假设业务没有执行。
+
+## Prometheus 与面板
+
+在 Grafana 选择 Prometheus。下列指标按实际有流量的路径使用；标签值以采集结果为准。
+
+| 目标 | 指标 |
+|---|---|
+| 网关请求与延迟 | `gateway_http_requests_total`、`gateway_http_request_duration_seconds_bucket` |
+| Java 代理错误与延迟 | `gateway_java_proxy_errors_total`、`gateway_java_proxy_duration_seconds_bucket` |
+| 互动缓存预热 | `interaction_cache_warm_total`、`interaction_cache_warm_duration_seconds_bucket` |
+| 认证与验证码 | `user_auth_requests_total`、`user_auth_request_duration_seconds_bucket`、`user_email_code_requests_total` |
+| 搜索 RPC 与 ES 查询 | `search_rpc_requests_total`、`search_rpc_request_duration_seconds_bucket`、`search_es_query_duration_seconds_bucket` |
+
+常用查询：
+
+```promql
+# 网关每秒请求数
+sum(rate(gateway_http_requests_total[5m]))
+
+# 网关 P95，保留 le 桶标签后计算分位数
+histogram_quantile(0.95,
+  sum by (le) (rate(gateway_http_request_duration_seconds_bucket[5m]))
+)
+
+# 代理错误按原因分组
+sum by (kind) (rate(gateway_java_proxy_errors_total[5m]))
+
+# 缓存预热按类型与结果分组
+sum by (kind, result) (rate(interaction_cache_warm_total[5m]))
+
+# 认证按动作和结果分组
+sum by (action, result) (rate(user_auth_requests_total[5m]))
 ```
 
-### 结合关键词检索 (Line Filter)
+Counter 使用 rate/increase，不直接把累计值作为实时吞吐；Histogram 桶聚合需要保留 `le`。低流量时 P95 可能没有样本，不等同于零延迟。
 
-通过 `|=` (包含) 进行全文搜索。
+## 当前限制
 
-按 `traceId` 查询单个请求的贯穿日志（例如 HTTP 入口 -> gRPC 调用 -> 数据库操作）：
-```logql
-{service=~".*"} |= "abc123traceidxyz"
-```
-*(注意：使用 `~".*"` 可跨所有服务查询该 traceId)*
-
-查询某个特定的错误：
-```logql
-{service="gateway-api"} |= "level=error"
-```
-
-查询 MQ 消费日志：
-```logql
-{service=~"sync-sidecar|platform-java"} |= "routingKey=comment.create"
-```
-
-### 高级提取与统计 (Metric Queries)
-
-Loki 允许你从日志中提取字段并进行统计聚合，我们推荐使用 JSON 解析器提取字段。
-
-计算过去 5 分钟内特定服务的错误率：
-```logql
-sum(rate({service="user-rpc"} |= "level=error" [5m]))
-```
-
-## 3. 面板配置 (Dashboards)
-
-建议手动在 Grafana 中创建或导入一套标准的 Dashboard：
-
-### 预置面板建议
-
-1.  **全局错误总览 (Global Error Overview)**:
-    - 查询: `sum(rate({service=~".*"} |= "level=error" [5m])) by (service)`
-    - 类型: Time series
-
-2.  **服务级别日志流 (Service Log Stream)**:
-    - 查询: `{service="$service"}` (使用 Dashboard 变量动态切换)
-    - 类型: Logs
-
-3.  **Trace 瀑布流探查面板 (Trace Inspector)**:
-    - 允许输入 `$traceId` 变量，结合 Loki 查出该链路的所有日志。
-    - 查询: `{service=~".*"} |= "$traceId"`
-
-### 设置方法
-
-在 Grafana 首页，点击左侧菜单的 **Dashboards** -> **New Dashboard** -> **Add visualization**，选择 Loki 数据源，粘贴上述查询并保存即可。团队可将其导出为 JSON 文件固化到代码仓库中（如放入 `deploy/grafana/dashboards` 目录）。
+- 旧的 `interaction_mq_publish_total` 不能代表新 Outbox 发布状态；当前需结合 Outbox 集合、日志和 RabbitMQ 判断积压。
+- Bloom 与 dummy 相关指标不一定有生产路径持续调用；空面板不能证明命中率为零或逻辑正确。
+- Sidecar ES 同步当前采用单消费者串行处理，避免旧事件覆盖新状态；吞吐瓶颈应先测量，再考虑按键有序并发。
+- 指标与 Trace 不能替代业务一致性校验。集群重启、MQ 故障及重复事件应使用隔离集成测试验证。
