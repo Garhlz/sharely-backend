@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"sync-sidecar/internal/obslog"
@@ -12,10 +15,43 @@ type ConsumerHandler func(d amqp.Delivery)
 
 // StartConsumerGroup 启动一组 Worker 来监听指定队列，并自动完成交换机声明与绑定
 func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler ConsumerHandler) {
-	ch, err := i.RMQ.Channel()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i.consumerCtx.Err() == nil {
+			if err := i.consumeGroup(i.consumerCtx, queueName, handler); err != nil && i.consumerCtx.Err() == nil {
+				obslog.Errorf("consumer reconnect queue=%s err=%v", queueName, err)
+			}
+			select {
+			case <-i.consumerCtx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
+}
+
+func (i *Infra) consumeGroup(ctx context.Context, queueName string, handler ConsumerHandler) error {
+	var wg sync.WaitGroup
+	conn, err := amqp.Dial(i.Cfg.RabbitMQURL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-finished:
+		}
+	}()
+
+	ch, err := conn.Channel()
 	if err != nil {
 		obslog.Errorf("open channel failed queue=%s err=%v", queueName, err)
-		panic(err)
+		return err
 	}
 
 	// 1. 声明业务交换机 (Topic 类型，持久化)
@@ -31,7 +67,7 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 	)
 	if err != nil {
 		obslog.Errorf("declare main exchange failed exchange=%s err=%v", i.Cfg.ExchangeMain, err)
-		panic(err)
+		return err
 	}
 
 	// 2. 声明死信交换机 (Topic 类型，持久化)
@@ -47,7 +83,7 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 	)
 	if err != nil {
 		obslog.Errorf("declare dlx exchange failed exchange=%s err=%v", i.Cfg.ExchangeDLX, err)
-		panic(err)
+		return err
 	}
 
 	// 3. 声明队列并绑定死信交换机
@@ -65,7 +101,7 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 	)
 	if err != nil {
 		obslog.Errorf("queue declare failed queue=%s err=%v", queueName, err)
-		panic(err)
+		return err
 	}
 
 	// 4. 根据配置自动执行绑定 (Binding)
@@ -81,7 +117,7 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 		)
 		if err != nil {
 			obslog.Errorf("queue bind failed queue=%s routingKey=%s err=%v", queueName, key, err)
-			panic(err)
+			return err
 		}
 		obslog.Infof("queue bound exchange=%s routingKey=%s queue=%s", i.Cfg.ExchangeMain, key, queueName)
 	}
@@ -90,28 +126,32 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 	err = ch.Qos(i.Cfg.WorkerCount*2, 0, false)
 	if err != nil {
 		obslog.Errorf("qos failed queue=%s err=%v", queueName, err)
-		panic(err)
+		return err
 	}
 
 	// 6. 开启消费
 	msgs, err := ch.Consume(
 		queueName,
-		"",    // consumer tag
-		false, // auto-ack (这里设为 false，由 Handler 手动 Ack)
-		false, // exclusive
-		false, // no-local
-		false, // no-wait
-		nil,   // args
+		"",                             // consumer tag
+		false,                          // auto-ack (这里设为 false，由 Handler 手动 Ack)
+		queueName == i.Cfg.QueueEsSync, // ES 队列只允许一个消费者，避免旧快照覆盖新文档。
+		false,                          // no-local
+		false,                          // no-wait
+		nil,                            // args
 	)
 	if err != nil {
 		obslog.Errorf("consume failed queue=%s err=%v", queueName, err)
-		panic(err)
+		return err
 	}
 
 	obslog.Infof("consumer group started queue=%s workers=%d", queueName, i.Cfg.WorkerCount)
 
 	// 7. 启动 Worker Pool
-	for k := 0; k < i.Cfg.WorkerCount; k++ {
+	workers := i.Cfg.WorkerCount
+	if queueName == i.Cfg.QueueEsSync {
+		workers = 1
+	}
+	for k := 0; k < workers; k++ {
 		wg.Add(1)
 		go func(workerId int) {
 			defer wg.Done()
@@ -130,4 +170,9 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 			}
 		}(k)
 	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return errors.New("consumer channel closed")
 }

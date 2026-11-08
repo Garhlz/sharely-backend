@@ -13,10 +13,12 @@ import (
 )
 
 type Infra struct {
-	Mongo *mongo.Client
-	ES    *elasticsearch.Client
-	RMQ   *amqp.Connection
-	Cfg   *config.AppConfig
+	Mongo         *mongo.Client
+	ES            *elasticsearch.Client
+	RMQ           *amqp.Connection
+	Cfg           *config.AppConfig
+	consumerCtx   context.Context
+	stopConsumers context.CancelFunc
 }
 
 func InitInfra(cfg *config.AppConfig) *Infra {
@@ -41,15 +43,21 @@ func InitInfra(cfg *config.AppConfig) *Infra {
 		log.Fatal("RabbitMQ Connect Error:", err)
 	}
 
+	consumerCtx, stopConsumers := context.WithCancel(context.Background())
 	return &Infra{
-		Mongo: mongoClient,
-		ES:    esClient,
-		RMQ:   rmqConn,
-		Cfg:   cfg,
+		Mongo:         mongoClient,
+		ES:            esClient,
+		RMQ:           rmqConn,
+		Cfg:           cfg,
+		consumerCtx:   consumerCtx,
+		stopConsumers: stopConsumers,
 	}
 }
 
 func (i *Infra) Close() {
+	if i.stopConsumers != nil {
+		i.stopConsumers()
+	}
 	if i.Mongo != nil {
 		i.Mongo.Disconnect(context.Background())
 	}

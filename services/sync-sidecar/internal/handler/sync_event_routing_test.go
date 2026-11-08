@@ -47,7 +47,7 @@ func makeSyncHandler(t *testing.T, esSrv *httptest.Server) *SyncHandler {
 	return &SyncHandler{
 		Infra: &service.Infra{
 			ES:    esClient,
-			Mongo: &mongo.Client{},
+			Mongo: nil,
 			Cfg: &config.AppConfig{
 				AuditEnable:  false,
 				IndexName:    "posts",

@@ -29,7 +29,8 @@ import (
 )
 
 type SyncHandler struct {
-	Infra *service.Infra
+	Infra   *service.Infra
+	indexMu sync.Mutex
 
 	// reindexMu 用来保护下面的 reindexRunning，避免同时触发多次全量回填。
 	reindexMu      sync.Mutex
@@ -37,6 +38,8 @@ type SyncHandler struct {
 }
 
 func (h *SyncHandler) Handle(d amqp.Delivery) {
+	h.indexMu.Lock()
+	defer h.indexMu.Unlock()
 	ctx := telemetry.ExtractDeliveryContext(context.Background(), d)
 	ctx, span := otel.Tracer("sync-sidecar").Start(ctx, "mq "+d.RoutingKey, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
 	defer span.End()
@@ -63,7 +66,11 @@ func (h *SyncHandler) Handle(d amqp.Delivery) {
 		var e event.PostCreateEvent
 		if err = json.Unmarshal(d.Body, &e); err == nil {
 			obslog.DeliveryInfof(d, "es sync receive event=PostCreateEvent postId=%s", e.Id)
-			err = h.handleCreate(ctx, es, e)
+			if h.Infra.Mongo != nil {
+				err = h.handleUpdate(ctx, es, h.Infra.Mongo.Database("rednote").Collection("posts"), event.PostUpdateEvent{PostId: e.Id})
+			} else {
+				err = h.handleCreate(ctx, es, e)
+			}
 		}
 	case "PostAuditPassEvent":
 		// 开启审核时，只有审核通过后才应进入 ES。这里直接回查 Mongo，拿到完整帖子数据。
@@ -106,7 +113,13 @@ func (h *SyncHandler) Handle(d amqp.Delivery) {
 
 	if err != nil {
 		obslog.DeliveryErrorf(d, "es sync handle error event=%s err=%v", className, err)
-		d.Nack(false, false)
+		// 合法消息的临时下游故障保留重试；非法 JSON 进入死信，避免毒消息阻塞。
+		if json.Valid(d.Body) {
+			time.Sleep(time.Second)
+			d.Nack(false, true)
+		} else {
+			d.Nack(false, false)
+		}
 	} else {
 		d.Ack(false)
 	}
@@ -362,6 +375,8 @@ func (h *SyncHandler) finishReindex() {
 }
 
 func (h *SyncHandler) reindexPostsFromMongo(ctx context.Context) (int, error) {
+	h.indexMu.Lock()
+	defer h.indexMu.Unlock()
 	obslog.Infof("reindex start source=mongo target=%s", h.Infra.Cfg.IndexName)
 	obslog.Infof("reindex prepare clear index=%s", h.Infra.Cfg.IndexName)
 
