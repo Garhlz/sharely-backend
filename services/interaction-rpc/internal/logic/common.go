@@ -2,7 +2,6 @@ package logic
 
 import (
 	"context"
-	"encoding/json"
 	appmetrics "interaction-rpc/internal/metrics"
 	"interaction-rpc/internal/svc"
 	"strconv"
@@ -14,17 +13,18 @@ import (
 	"github.com/zeromicro/go-zero/core/logx"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/metadata"
 )
 
 // ==========================================
 // 1. 常量定义
 // ==========================================
+const fillSetScript = "redis.call('DEL', KEYS[1]); for i=2,#ARGV do redis.call('SADD', KEYS[1], ARGV[i]) end; redis.call('EXPIRE', KEYS[1], ARGV[1]); return 1"
+const fillHashScript = "redis.call('DEL', KEYS[1]); for i=2,#ARGV,2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i+1]) end; redis.call('EXPIRE', KEYS[1], ARGV[1]); return 1"
+
 const (
 	// BizRedis Key 前缀。
-	// 这里的 Redis 不是单纯“查不到就算了”的旁路缓存，而是互动读链路的主读取来源。
-	// Mongo/Java 侧更多承担持久化、异步聚合、搜索同步等职责。
+	// MongoDB 保存互动事实，Redis 只保存可回填的短期读模型。
 	KeyPostLikeSet    = "post:like:"    // 对应 Java: POST_LIKE_SET
 	KeyPostCollectSet = "post:collect:" // 对应 Java: POST_COLLECT_SET
 	KeyPostRateHash   = "post:rate:"    // 对应 Java: POST_RATE_HASH
@@ -49,7 +49,7 @@ const (
 	DummyUserId = "-1"
 
 	// 预热后的互动集合只保留有限时间，避免冷门帖子长期占用 Redis 内存。
-	cacheTTLSeconds = 24 * 60 * 60
+	cacheTTLSeconds = 60
 	// 预热时加一把短锁，避免同一个 key 在高并发下被多个请求同时回源 Mongo。
 	cacheWarmLockSeconds = 5
 	cacheWarmRetryCount  = 10
@@ -126,52 +126,6 @@ func interactionEventIfChanged(changed int, userID int64, targetID, interactionT
 		Action:   action,
 		Value:    value,
 	}, true
-}
-
-// ==========================================
-// 3. 通用 MQ 发送函数
-// ==========================================
-func publishEvent(ctx context.Context, channel *amqp091.Channel, routingKey string, event *InteractionEvent) error {
-	// 1. 序列化为 JSON
-	body, err := json.Marshal(event)
-	if err != nil {
-		appmetrics.IncMQPublish(routingKey, "marshal_error")
-		return err
-	}
-
-	// 2. 发送消息
-	// 注意：Context 用于控制超时，amqp091-go 支持带 Context 的 Publish
-	requestID := requestIDFromContext(ctx)
-	headers := amqp091.Table{
-		"X-Request-Id":  requestID,
-		"X-Trace-Id":    requestID,
-		"X-Service":     "interaction-rpc",
-		"X-Routing-Key": routingKey,
-	}
-	otel.GetTextMapPropagator().Inject(ctx, amqpHeaderCarrier(headers))
-	err = channel.PublishWithContext(ctx,
-		ExchangeName, // exchange
-		routingKey,   // routing key
-		false,        // mandatory
-		false,        // immediate
-		amqp091.Publishing{
-			ContentType:  "application/json",
-			DeliveryMode: amqp091.Persistent, // 消息持久化
-			Timestamp:    time.Now(),
-			Body:         body,
-			Headers:      headers,
-		},
-	)
-
-	if err != nil {
-		appmetrics.IncMQPublish(routingKey, "publish_error")
-		logx.WithContext(ctx).Errorf("Failed to publish event: %v", err)
-		return err
-	}
-
-	appmetrics.IncMQPublish(routingKey, "success")
-	logx.WithContext(ctx).Infof("mq publish success routingKey=%s payload=%s", routingKey, string(body))
-	return nil
 }
 
 func requestIDFromContext(ctx context.Context) string {
@@ -340,34 +294,23 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 		return err
 	}
 
-	if len(likes) > 0 {
-		// Mongo 中存在真实互动记录，整批写回 Redis Set。
-		args := make([]any, len(likes))
-		for i, like := range likes {
-			args[i] = strconv.FormatInt(like.UserId, 10)
-		}
-		_, err = svcCtx.Redis.SaddCtx(ctx, key, args...)
-		if err == nil {
-			// 一旦确认真实存在互动数据，就把 targetId 加入 Bloom。
-			// 后续读请求可以先走 Bloom 做快速判断，减少不必要的 Mongo 预热尝试。
-			AddBloom(ctx, svcCtx, spec.bloomKey, targetId)
-		}
+	// 内容和 TTL 原子写入，避免请求中断留下永不过期的半成品缓存。
+	args := []any{cacheTTLSeconds}
+	if len(likes) == 0 {
+		args = append(args, DummyUserId)
 	} else {
-		// Mongo 返回空集合时不能什么都不写。
-		// 否则下一次读写这个目标时，仍然会认为“缓存不存在”，又去查 Mongo，形成穿透。
-		// 即这个集合已经被预热过，但是不存在真实数据
-		_, err = svcCtx.Redis.SaddCtx(ctx, key, DummyUserId)
-		if err == nil {
-			appmetrics.IncDummyOp(kind, "fill")
+		for _, like := range likes {
+			args = append(args, strconv.FormatInt(like.UserId, 10))
 		}
 	}
+	_, err = svcCtx.Redis.EvalCtx(ctx, fillSetScript, []string{key}, args...)
 	if err != nil {
 		metricResult = "redis_write_error"
 		return err
 	}
-
-	// 预热后的 key 统一设置 TTL，避免 Redis 中残留大量长期无人访问的互动集合。
-	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+	if len(likes) == 0 {
+		appmetrics.IncDummyOp(kind, "fill")
+	}
 	metricResult = "mongo_loaded"
 	return nil
 }
@@ -453,31 +396,24 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 		return err
 	}
 
+	args := []any{cacheTTLSeconds}
 	if len(ratings) == 0 {
-		// 评分也需要“空值占位”。
-		// 这样即便该帖子从未被评分，也能阻止后续请求持续穿透到 Mongo。
-		_, err = svcCtx.Redis.HsetnxCtx(ctx, key, DummyUserId, "0")
-		if err != nil {
-			metricResult = "redis_write_error"
-			return err
+		args = append(args, DummyUserId, "0")
+	} else {
+		for _, rating := range ratings {
+			args = append(args, strconv.FormatInt(rating.UserId, 10), strconv.FormatFloat(rating.Score, 'f', 1, 64))
 		}
+	}
+	_, err = svcCtx.Redis.EvalCtx(ctx, fillHashScript, []string{key}, args...)
+	if err != nil {
+		metricResult = "redis_write_error"
+		return err
+	}
+	if len(ratings) == 0 {
 		appmetrics.IncDummyOp(kind, "fill")
-		_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
 		metricResult = "mongo_empty"
 		return nil
 	}
-
-	for _, rating := range ratings {
-		// 用一位小数字符串写入 Redis，保证和业务协议中的评分格式一致。
-		scoreStr := strconv.FormatFloat(rating.Score, 'f', 1, 64)
-		if err := svcCtx.Redis.HsetCtx(ctx, key, strconv.FormatInt(rating.UserId, 10), scoreStr); err != nil {
-			metricResult = "redis_write_error"
-			return err
-		}
-	}
-	// 评分数据存在时，同样把帖子加入 Bloom，供后续快速判断使用。
-	AddBloom(ctx, svcCtx, spec.bloomKey, targetId)
-	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
 	metricResult = "mongo_loaded"
 	return nil
 }
@@ -485,22 +421,12 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 // ShouldLoadSetCache / ShouldLoadHashCache 负责决定“是否值得尝试预热”。
 // 返回 true 的含义不是“Redis 一定缺 key”，而是“这个目标可能有真实互动数据，或者 Bloom 本身不可用，需要兜底检查”。
 func ShouldLoadSetCache(ctx context.Context, svcCtx *svc.ServiceContext, targetId string, spec setCacheSpec) bool {
-	ready, exists := CheckBloom(ctx, svcCtx, spec.bloomKey, targetId)
-	// bloom本身不可用
-	if !ready {
-		// Bloom 不可用时保守处理，允许走预热逻辑，避免漏掉真实数据。
-		return true
-	}
-	// 返回当前redis key是否可能存在
-	return exists
+	// 持久化先行后，Bloom 的更新不与事务绑定，不能用阴性结果跳过事实数据。
+	return true
 }
 
 func ShouldLoadHashCache(ctx context.Context, svcCtx *svc.ServiceContext, targetId string, spec hashCacheSpec) bool {
-	ready, exists := CheckBloom(ctx, svcCtx, spec.bloomKey, targetId)
-	if !ready {
-		return true
-	}
-	return exists
+	return true
 }
 
 // CheckBloom 返回两个值：

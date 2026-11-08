@@ -2,12 +2,10 @@ package logic
 
 import (
 	"context"
-	"strconv"
-
-	"interaction-rpc/interaction"
-	"interaction-rpc/internal/svc"
-
 	"github.com/zeromicro/go-zero/core/logx"
+	"interaction-rpc/interaction"
+	"interaction-rpc/internal/store"
+	"interaction-rpc/internal/svc"
 )
 
 type UncollectPostLogic struct {
@@ -17,36 +15,13 @@ type UncollectPostLogic struct {
 }
 
 func NewUncollectPostLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UncollectPostLogic {
-	return &UncollectPostLogic{
-		ctx:    ctx,
-		svcCtx: svcCtx,
-		Logger: logx.WithContext(ctx),
-	}
+	return &UncollectPostLogic{ctx: ctx, svcCtx: svcCtx, Logger: logx.WithContext(ctx)}
 }
 
-// 取消收藏帖子
 func (l *UncollectPostLogic) UncollectPost(in *interaction.InteractionRequest) (*interaction.Empty, error) {
-	key := KeyPostCollectSet + in.TargetId
-	userIdStr := strconv.FormatInt(in.UserId, 10)
-
-	if err := EnsurePostCollectCache(l.ctx, l.svcCtx, in.TargetId); err != nil {
-		l.Logger.Errorf("ensure post collect cache error: %v", err)
-		return nil, err
-	}
-
-	// BizRedis SREM
-	removed, err := l.svcCtx.Redis.SremCtx(l.ctx, key, userIdStr)
+	err := mutate(l.ctx, l.svcCtx, store.Command{UserID: in.GetUserId(), TargetID: in.GetTargetId(), Kind: "COLLECT", Remove: true})
 	if err != nil {
-		l.Logger.Errorf("BizRedis error: %v", err)
 		return nil, err
 	}
-
-	if event, changed := interactionEventIfChanged(removed, in.UserId, in.TargetId, "COLLECT", "REMOVE", nil); changed {
-		ensureDummyUserIfEmpty(l.ctx, l.svcCtx, key)
-
-		// 使用 Delete 的 RoutingKey
-		_ = publishEvent(l.ctx, l.svcCtx.MqChannel, RoutingKeyDelete, event)
-	}
-
 	return &interaction.Empty{}, nil
 }

@@ -2,12 +2,10 @@ package logic
 
 import (
 	"context"
-	"strconv"
-
-	"interaction-rpc/interaction"
-	"interaction-rpc/internal/svc"
-
 	"github.com/zeromicro/go-zero/core/logx"
+	"interaction-rpc/interaction"
+	"interaction-rpc/internal/store"
+	"interaction-rpc/internal/svc"
 )
 
 type UnlikeCommentLogic struct {
@@ -17,36 +15,13 @@ type UnlikeCommentLogic struct {
 }
 
 func NewUnlikeCommentLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UnlikeCommentLogic {
-	return &UnlikeCommentLogic{
-		ctx:    ctx,
-		svcCtx: svcCtx,
-		Logger: logx.WithContext(ctx),
-	}
+	return &UnlikeCommentLogic{ctx: ctx, svcCtx: svcCtx, Logger: logx.WithContext(ctx)}
 }
 
-// 取消点赞评论
 func (l *UnlikeCommentLogic) UnlikeComment(in *interaction.InteractionRequest) (*interaction.Empty, error) {
-	key := KeyCommentLikeSet + in.TargetId
-	userIdStr := strconv.FormatInt(in.UserId, 10)
-
-	if err := EnsureCommentLikeCache(l.ctx, l.svcCtx, in.TargetId); err != nil {
-		l.Logger.Errorf("ensure comment like cache error: %v", err)
-		return nil, err
-	}
-
-	// BizRedis SREM
-	removed, err := l.svcCtx.Redis.SremCtx(l.ctx, key, userIdStr)
+	err := mutate(l.ctx, l.svcCtx, store.Command{UserID: in.GetUserId(), TargetID: in.GetTargetId(), Kind: "COMMENT_LIKE", Remove: true})
 	if err != nil {
-		l.Logger.Errorf("BizRedis error: %v", err)
 		return nil, err
 	}
-
-	if event, changed := interactionEventIfChanged(removed, in.UserId, in.TargetId, "COMMENT_LIKE", "REMOVE", nil); changed {
-		ensureDummyUserIfEmpty(l.ctx, l.svcCtx, key)
-
-		// 使用 Delete 的 RoutingKey
-		_ = publishEvent(l.ctx, l.svcCtx.MqChannel, RoutingKeyDelete, event)
-	}
-
 	return &interaction.Empty{}, nil
 }

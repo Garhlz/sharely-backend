@@ -2,12 +2,10 @@ package logic
 
 import (
 	"context"
-	"strconv"
-
-	"interaction-rpc/interaction"
-	"interaction-rpc/internal/svc"
-
 	"github.com/zeromicro/go-zero/core/logx"
+	"interaction-rpc/interaction"
+	"interaction-rpc/internal/store"
+	"interaction-rpc/internal/svc"
 )
 
 type LikeCommentLogic struct {
@@ -17,44 +15,13 @@ type LikeCommentLogic struct {
 }
 
 func NewLikeCommentLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LikeCommentLogic {
-	return &LikeCommentLogic{
-		ctx:    ctx,
-		svcCtx: svcCtx,
-		Logger: logx.WithContext(ctx),
-	}
+	return &LikeCommentLogic{ctx: ctx, svcCtx: svcCtx, Logger: logx.WithContext(ctx)}
 }
 
-// 点赞评论
 func (l *LikeCommentLogic) LikeComment(in *interaction.InteractionRequest) (*interaction.Empty, error) {
-	// 1. 拼接 BizRedis Key
-	key := KeyCommentLikeSet + in.TargetId
-	userIdStr := strconv.FormatInt(in.UserId, 10)
-
-	if err := EnsureCommentLikeCache(l.ctx, l.svcCtx, in.TargetId); err != nil {
-		l.Logger.Errorf("ensure comment like cache error: %v", err)
-		return nil, err
-	}
-
-	// 2. BizRedis SADD 操作
-	// Saddle 会返回成功添加的数量 (1表示新加，0表示已存在)
-	added, err := l.svcCtx.Redis.SaddCtx(l.ctx, key, userIdStr)
+	err := mutate(l.ctx, l.svcCtx, store.Command{UserID: in.GetUserId(), TargetID: in.GetTargetId(), Kind: "COMMENT_LIKE", Remove: false})
 	if err != nil {
-		l.Logger.Errorf("BizRedis error: %v", err)
 		return nil, err
 	}
-
-	// 3. 如果添加成功，发送 MQ 消息
-	if event, changed := interactionEventIfChanged(added, in.UserId, in.TargetId, "COMMENT_LIKE", "ADD", nil); changed {
-		removeDummyUser(l.ctx, l.svcCtx, key)
-		AddBloom(l.ctx, l.svcCtx, KeyBloomCommentLike, in.TargetId)
-
-		// 调用 common.go 里的通用发送方法
-		if err := publishEvent(l.ctx, l.svcCtx.MqChannel, RoutingKeyCreate, event); err != nil {
-			// 注意：这里发送失败是否要回滚 BizRedis？
-			// 对于点赞这种非强一致业务，通常只打印 Error log，不回滚，允许短暂不一致。
-			l.Logger.Errorf("Failed to send MQ: %v", err)
-		}
-	}
-
 	return &interaction.Empty{}, nil
 }

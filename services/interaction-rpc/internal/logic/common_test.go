@@ -82,7 +82,7 @@ func TestInteractionConstantsMatchCrossLanguageContract(t *testing.T) {
 	assert.Equal(t, "interaction.create", RoutingKeyCreate)
 	assert.Equal(t, "interaction.delete", RoutingKeyDelete)
 	assert.Equal(t, "-1", DummyUserId)
-	assert.Equal(t, 24*60*60, cacheTTLSeconds)
+	assert.Equal(t, 60, cacheTTLSeconds)
 	assert.Equal(t, 5, cacheWarmLockSeconds)
 }
 

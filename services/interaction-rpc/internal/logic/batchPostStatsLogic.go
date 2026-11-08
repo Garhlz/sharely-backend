@@ -9,6 +9,7 @@ import (
 
 	"github.com/zeromicro/go-zero/core/logx"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -108,14 +109,20 @@ func (l *BatchPostStatsLogic) BatchPostStats(in *interaction.BatchPostStatsReque
 		// 评论数、评分总人数、评分均值目前仍由 Mongo posts 文档提供。
 		// 这部分不是高频切换状态，不需要像点赞/收藏那样完全依赖 Redis Set/Hash。
 		type postDoc struct {
-			ID            string  `bson:"_id"`
-			CommentCount  int32   `bson:"commentCount"`
-			RatingCount   int32   `bson:"ratingCount"`
-			RatingAverage float64 `bson:"ratingAverage"`
+			ID            primitive.ObjectID `bson:"_id"`
+			CommentCount  int32              `bson:"commentCount"`
+			RatingCount   int32              `bson:"ratingCount"`
+			RatingAverage float64            `bson:"ratingAverage"`
+		}
+		ids := make([]primitive.ObjectID, 0, len(in.GetPostIds()))
+		for _, id := range in.GetPostIds() {
+			if objectID, err := primitive.ObjectIDFromHex(id); err == nil {
+				ids = append(ids, objectID)
+			}
 		}
 		cursor, err := l.svcCtx.Mongo.Collection("posts").Find(
 			l.ctx,
-			bson.M{"_id": bson.M{"$in": in.GetPostIds()}},
+			bson.M{"_id": bson.M{"$in": ids}},
 			options.Find().SetProjection(bson.M{"commentCount": 1, "ratingCount": 1, "ratingAverage": 1}),
 		)
 		if err != nil {
@@ -127,7 +134,7 @@ func (l *BatchPostStatsLogic) BatchPostStats(in *interaction.BatchPostStatsReque
 				if err := cursor.Decode(&doc); err != nil {
 					continue
 				}
-				if st, ok := stats[doc.ID]; ok {
+				if st, ok := stats[doc.ID.Hex()]; ok {
 					st.CommentCount = doc.CommentCount
 					st.RatingCount = doc.RatingCount
 					st.RatingAverage = doc.RatingAverage

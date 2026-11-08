@@ -10,7 +10,7 @@
 - 评论点赞 / 取消点赞
 - 批量查询帖子互动状态
 - 用户主页统计数据聚合
-- 发布 `interaction.create / interaction.delete` 事件
+- 事务 Outbox 投递互动通知和搜索刷新任务
 
 ## 接口规范
 
@@ -45,21 +45,20 @@ curl -X POST 'http://localhost:8090/api/interaction/like/post' \
 
 ### 缓存保护策略
 
-服务实现了完整的缓存保护组合：
+服务使用短期缓存与回填保护：
 
 - Dummy 占位
   - 避免空 key 被重复回源
 - 短锁预热
-  - 并发请求下只允许一个协程回源预热
-- Bloom Filter
-  - 判断某个目标是否“可能存在真实互动数据”
-  - 若 Bloom 明确判断不存在，则可直接跳过预热
+  - 减少同 Key 的并发回源，等待超时后仍可能并发加载
+- Lua 原子回填集合与 60 秒 TTL；Bloom 不再用于跳过事实数据查询
 
 ### 事件发布
 
-- 成功写入 Redis 后发布 MQ 事件
-- 事件中会注入 trace 上下文和 `routingKey`
-- 下游 Java listener 可根据事件更新 Mongo 中的统计字段或生成通知
+- MongoDB 事务同时提交互动明细、统计投影和 Outbox，提交后失效 Redis
+- 后台投递使用持久化消息、mandatory、Confirm，失败保留任务并重连
+- notification-rpc 消费独立队列生成通知，Sidecar 负责 ES 刷新
+- 启动需要 MongoDB 副本集；切换与验证见 [迁移说明](../../docs/interaction_migration.md)
 
 ### 用户主页统计
 
@@ -74,10 +73,10 @@ curl -X POST 'http://localhost:8090/api/interaction/like/post' \
 
 ## 技术亮点
 
-- 不是“Redis 当缓存”，而是把 Redis 作为互动高频读模型
-- `Dummy + Bloom + 短锁预热` 组合有效降低缓存穿透和击穿
+- MongoDB 为互动事实源，Redis 为可重建的短期读模型
+- 事务统计和 Outbox 避免已确认互动因消息发送失败而丢失
 - 批量接口 `BatchPostStats` 能一次性补齐帖子列表页需要的多个互动字段
-- MQ 事件发布时同步透传 trace 信息，便于回溯一次互动对下游产生的影响
+- Outbox 保留 trace 上下文，支持异步传播
 
 ## 关键依赖
 

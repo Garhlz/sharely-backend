@@ -3,9 +3,10 @@ package svc
 import (
 	"context"
 	"interaction-rpc/internal/config"
+	"interaction-rpc/internal/store"
 	"strings"
+	"time"
 
-	"github.com/rabbitmq/amqp091-go" // RabbitMQ 官方驱动
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx" // 用于打印日志
 	"github.com/zeromicro/go-zero/core/stores/redis"
@@ -21,13 +22,8 @@ type ServiceContext struct {
 	Redis    *redis.Redis
 	RawRedis *goredis.Client
 
-	// 2. 定义 RabbitMQ 连接和通道
-	// 注意：为了演示简单，这里只保存 Channel。
-	// 生产环境通常需要封装一个断线重连的 Wrapper。
-	MqConn    *amqp091.Connection
-	MqChannel *amqp091.Channel
-
-	Mongo *mongo.Database
+	Mongo        *mongo.Database
+	Interactions store.Writer
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
@@ -44,20 +40,6 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		DB:       0,
 	})
 
-	// B. 初始化 RabbitMQ
-	// 建立 TCP 连接
-	conn, err := amqp091.Dial(c.RabbitMQ.DataSource)
-	if err != nil {
-		// 既然是微服务，如果连不上 MQ，启动没有任何意义，直接 panic
-		panic("Failed to connect to RabbitMQ: " + err.Error())
-	}
-
-	// 建立 Channel (轻量级信道，后续发消息都通过它)
-	ch, err := conn.Channel()
-	if err != nil {
-		panic("Failed to open a RabbitMQ channel: " + err.Error())
-	}
-
 	var mongoDb *mongo.Database
 	if c.Mongo.Uri != "" {
 		client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(c.Mongo.Uri))
@@ -71,14 +53,22 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		mongoDb = client.Database(dbName)
 	}
 
-	logx.Info("RabbitMQ, BizRedis, Mongo initialized successfully!")
+	if mongoDb == nil {
+		panic("Mongo is required for interaction writes")
+	}
+	writer := &store.MongoStore{DB: mongoDb}
+	initCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := writer.Init(initCtx); err != nil {
+		panic(err)
+	}
+	logx.Info("BizRedis and Mongo initialized; MQ is delivered by durable outbox")
 
 	return &ServiceContext{
-		Config:    c,
-		Redis:     redisClient,
-		RawRedis:  rawRedis,
-		MqConn:    conn,
-		MqChannel: ch,
-		Mongo:     mongoDb,
+		Config:       c,
+		Redis:        redisClient,
+		RawRedis:     rawRedis,
+		Mongo:        mongoDb,
+		Interactions: writer,
 	}
 }
