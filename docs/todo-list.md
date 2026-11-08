@@ -1,138 +1,26 @@
-# 开发与验证状态
+# 开发 TODO
 
-状态约定：
+仅记录未完成事项。当前边界见 [架构](architecture.md)，已有验证及历史覆盖率见 [测试](testing.md)。
 
-- **已实现**：代码或脚本已经完成并有局部自动化验证
-- **待验证**：需要完整运行环境确认
-- **已自动化**：已经进入普通 CI
+## P0：交付前验证
 
-## P1 — 功能与架构
+- [ ] 在最终提交版本上重新运行完整冒烟测试，保留版本、环境及结果；Redis 客户端切换后的局部测试不能代替整链路验证。
+- [ ] 重新生成七个 Go 模块的覆盖率，替换历史基线；优先审查失败分支，不以全仓百分比代替质量判断。
+- [ ] 保存一条可演示链路：登录 → 发帖 → 点赞/评论 → 通知 → 搜索，并记录服务职责及数据去向。
 
-### 网关 OpenAPI 对齐
-- `/admin/*` 已在运行时路由中统一绑定 `javaproxy.ProxyHandler`，后台功能由 Java `AdminController` 承担，不会进入生成的 Go logic
-- `gateway.api` 中后台请求/响应仍使用 `Empty` 占位，生成的 admin handler/logic 只是未被注册的脚手架代码
-- 待办：补齐后台接口契约；决定是保留 API 声明并生成“代理型 handler”，还是将代理路由独立维护并删除无效脚手架，避免后续执行 `goctl` 时覆盖手工路由
+## P1：可靠性
 
-### 用户域接口迁移策略
-- 关注列表、粉丝列表、好友列表、个人互动历史等仍由 Java 承担
-- 建议：明确哪些接口短期留 Java、哪些迁 `user-rpc`
+- [ ] 明确用户更新/删除事件的失败恢复方案；当前用户 Publisher 没有 Outbox、确认及重连，不能套用互动域的可靠性承诺。
+- [ ] 补齐旧评论 MQ 客户端断线重连及故障回归。
+- [ ] 检查删帖、删用户、取消关系后的历史互动、通知及缓存清理边界，补充幂等与重放验证。
+- [ ] 为 Outbox 待发送数量、最老事件年龄及连续失败增加指标与告警，明确毒消息处理策略。
+- [ ] 为通知消费凭据制定保留/清理策略，验证清理后重放的业务语义。
+- [ ] 固化 MongoDB 副本集备份、恢复和迁移回滚演练，不把恢复旧二进制当作完整回滚。
 
-### 接口回归（至少覆盖）
-- `/api/user/search`、`/api/post/list?tab=follow`
-- `/api/message/unread-count`、`/api/comment/list`
-- `/api/post/search`、`/api/post/search/suggest`
+## P2：按需完善
 
----
+- [ ] 对真实热点链路做可复现压测，再决定缓存 TTL、预热互斥及 Outbox 吞吐优化；当前不声明生产级性能。
+- [ ] 根据演示需要固化 Grafana Dashboard；清理未被调用的旧指标，避免空面板被误解为零故障。
+- [ ] 检查 Java 保留的管理功能与 Go 数据模型的契约，逐项消除重复配置与失效入口。
 
-## P2 — 工程质量
-
-### Mongo 索引审计
-- `comments`、`comment_likes`、`notifications`、`posts`、`user_follows` 集合存在 Java/Go 双写索引冲突风险
-- 已有脚本：`scripts/audit_mongo_indexes.sh`
-
-### comment 事件模型扩展（可选）
-- 删除事件可补充 `deleteMode / isRoot / operatorRole / operatorUserId` 字段
-
-### 服务发现多实例验证（可选）
-- Go 侧已接入 etcd；如需展示微服务治理能力可继续做 Java 侧适配
-
-### 推荐流升级（可选）
-- 当前为热度排序 + 关注流；后续可考虑标签召回、协同过滤、用户画像
-
----
-
-## P3 — 自动化测试
-
-### 测试规范
-- 框架：Go 原生 `testing` + `testify/assert`（前置断言用 `require`）
-- 命名：场景化，如 `TestCreateComment_MQPublishFailed`
-- 隔离：L1 不连真实数据库；L2 用 fake/stub/mtest/httptest；L3 用 docker compose
-- 结构：优先表驱动；每修复一个真实 bug 补一条对应测试
-- 分层：**L1** 纯函数/DTO/映射 | **L2** handler/logic/fake 依赖 | **L3** 跨服务冒烟
-
----
-
-### 测试完成情况
-
-#### L1（已实现并进入 CI）
-
-| 文件 | 覆盖内容 |
-|------|---------|
-| `gateway-api/ctxutil_test.go` | UserID/Role/Nickname/Token/RequestID/TraceID 提取，类型错误回退 |
-| `comment-rpc/comment_doc_test.go` | `ToProto()` 全字段映射，含 ReplyToUserId/ReplyToUserNickname |
-| `comment-rpc/mq_event_test.go` | `requestIDFromContext`，nil/无metadata/x-request-id/x-trace-id 优先级 |
-| `comment-rpc/delete_comment_logic_test.go` | 规则锁定：软删不发 MQ、权限条件组合（保留，不扩散） |
-| `search-rpc/suggestLogic_test.go` | `collectSuggestFallbacks`，大小写/title/tags/空关键词 |
-| `search-rpc/search_score_test.go` | `buildSearchSummary`，highlight优先/截断/trim/多字节边界 |
-| `search-rpc/suggest_dedup_test.go` | `assembleSuggestions`，原词优先/仅有原词清空/去重/高亮优先/最多10条 |
-| `notification-rpc/notification_doc_test.go` | `FormatNotificationType`/`ParseNotificationType` 全类型双向映射 |
-| `sync-sidecar/reindex_test.go` | `beginReindex/finishReindex` 并发互斥，10 goroutine 仅1个成功 |
-| `user-rpc/helpers_test.go` | 密码哈希、Token 类型/JTI/版本、邮箱场景、生日解析、可空字段映射 |
-| `interaction-rpc/common_test.go` | MQ 事件 JSON 契约、requestId 优先级、AMQP header carrier、缓存规格 |
-| `gateway-api/auth/mapper_test.go` | 登录 Token/User DTO 完整、部分与 nil 响应映射 |
-| `gateway-api/comment/common_test.go` | 评论分页、作者、回复对象、子评论和时间字段映射 |
-| `gateway-api/response/response_test.go` | 成功 Envelope、AppError 和 gRPC→HTTP/业务码映射 |
-| `user-rpc/validation_test.go` | 登录、注册、验证码、刷新 Token、资料更新的依赖前输入校验 |
-| `user-rpc/helpers_test.go`（追加） | Redis Key 命名、Token JTI、六位验证码和邮件格式 |
-| `interaction-rpc/common_test.go`（追加） | 四类缓存规格、Bloom Key、MQ exchange/routing key 和 TTL 常量 |
-| `interaction-rpc/like_post_logic_test.go` | miniredis 点赞幂等、Dummy 清理、事件发布与 MQ 失败弱一致性 |
-| `user-rpc/auth_state_test.go` | fake store + miniredis 覆盖登录、注册、黑名单、Token 版本与 Refresh 轮换 |
-| `platform-java/common/UserContextTest.java` | ThreadLocal 用户信息读写、清理和线程隔离 |
-| `platform-java/enums/ResultCodeTest.java` | 错误码唯一性、文案非空和 HTTP 前缀约定 |
-| `platform-java/util/JwtUtilTest.java` | Access/Refresh claims、签名校验和篡改拒绝 |
-
-#### L2（已实现并进入 CI）
-
-| 文件 | 覆盖内容 |
-|------|---------|
-| `gateway-api/auth_test.go` | 无/无效/过期 token→401；有效 JWT 注入 userId/role/nickname；Cookie 兼容；公开路径弱鉴权；refresh token 被拒 |
-| `gateway-api/proxy_test.go` | 用户头透传；匿名不发头；上游不可达/非法URL→502；状态码与body透传 |
-| `sync-sidecar/sync_http_test.go` | 非POST→405；Token错→403；并发冲突→409 |
-| `sync-sidecar/sync_event_routing_test.go` | PostCreate→ES index；PostDelete→ES delete；未知类型/缺失TypeId不调用ES；审核模式跳过；非法JSON不调ES；ES404不panic |
-| `comment-rpc/create_comment_logic_test.go` | Mongo不可用；违规词→InvalidArgument；非法postId；回复字段写入（mtest） |
-| `comment-rpc/delete_comment_logic_l2_test.go` | Mongo不可用；非法commentId；权限拒绝；管理员可删；根评论软删；子评论硬删；like清理失败 |
-| `comment-rpc/list_sub_comments_logic_test.go` | 分页参数兜底；匿名态isLiked全false；登录态isLiked聚合；空结果 |
-| `notification-rpc/notification_logic_test.go`（追加） | MarkBatchRead 幂等性；upsert 覆盖更新 isRead 重置为 false；COMMENT 类型走 CreateNotification 不走 upsert |
-| `sync-sidecar/sync_http_test.go`（追加） | AdminToken 为空时行为锁定（空==空放行，409 冲突返回） |
-| `sync-sidecar/sync_event_routing_test.go`（追加） | PostUpdateEvent Mongo 查不到走 handleDelete → 调用 ES DELETE |
-| `gateway-api/middleware/requestid_proxy_test.go` | RequestIdMiddleware 生成/透传 requestId；联合 ProxyHandler 验证 X-Request-Id/X-Trace-Id 到上游透传 |
-| `search-rpc/suggest_integration_test.go` | 空关键词不调ES；5xx透传错误；0命中原词不插入；有高亮原词在前；非法JSON解码错误；仅有原词清空 |
-| `notification-rpc/notification_logic_test.go` | GetUnreadCount；Create/Upsert（nil payload/正常/重复）；MarkAllRead；MarkBatchRead（空ids/非法ids） |
-| `notification-rpc/list_notifications_logic_test.go` | 分页参数兜底；空结果；字段映射；未知类型映射为UNKNOWN |
-| `gateway-api/write_post_logic_test.go` | Java 帖子写代理的方法、路径、鉴权/链路头、请求体和业务错误 |
-
-#### L3（已在完整集群验证）
-
-| 脚本 | 覆盖链路 |
-|------|---------|
-| `scripts/smoke/01_post_to_es.sh` | 发帖 → sidecar → ES 可搜索 → 建议词含原词 |
-| `scripts/smoke/02_comment_soft_delete.sh` | 一级评论软删后列表可见占位文案 |
-| `scripts/smoke/03_notification_unread.sh` | 点赞触发通知 → 未读数增加 → 全部已读归零 |
-| `scripts/smoke/04_sub_comment_reply_count.sh` | 子评论删除后根评论 replyCount 正确扣减 |
-| `scripts/smoke/05_auth_cookie_vs_header.sh` | Cookie 鉴权与 Header 鉴权两种路径打通评论/通知接口；无 Token 公开接口不 401 |
-| `scripts/smoke/run_all.sh` | 汇总执行入口 |
-
-> 2026-07-23 在 macOS + OrbStack 环境完成验证，5/5 通过。L3 依赖完整中间件和 Java 服务，普通 CI 不自动执行；后续修改跨服务契约后应重新运行并更新日期。
-
----
-
-### 当前状态说明
-
-#### L2 测试
-评论、通知、搜索、sidecar 和网关已有主要分支测试。`user-rpc/internal/logic` 已通过 fake store + miniredis 提升到 31.9%；`interaction-rpc/internal/logic` 已通过事件契约和真实 Redis 点赞幂等测试提升到 12.4%。下一阶段优先补互动缓存冷启动/取消/评分，以及修改密码后的 Token 失效。
-
-#### L3 smoke 脚本
-已有 5 条业务脚本和汇总入口，已按当前网关契约修正。2026-07-23 最近一次完整运行结果为 5/5 通过。
-
----
-
-## 已完成功能
-
-- 评论 / 通知 RPC 拆分（comment-rpc、notification-rpc）
-- 评论链路一致性修复（MQ 回滚、replyCount 扣减、软删不扣 commentCount）
-- 搜索与建议词优化（hot 权重、原词优先策略）
-- 网关鉴权增强（Cookie 回退、用户头透传、javaproxy 平滑代理）
-- 可观测性建设（OpenTelemetry、Jaeger、Loki + Grafana、统一日志字段）
-- 文档体系（README、文档导航、面试速查、observability.md、user_events.md）
-- 工具脚本（audit_mongo_indexes.sh、verify_full_integration.sh、smoke/）
-- 自动化测试体系（L1/L2 进入 CI；L3 smoke 已在完整集群验证）
+暂不扩大微服务拆分、不迁移全部 Java 功能、不为了简历引入新中间件。优先保证已有闭环可运行、故障边界可解释。

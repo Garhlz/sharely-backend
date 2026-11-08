@@ -189,11 +189,11 @@ Smoke 测试依赖完整集群，不在普通 PR CI 中执行。
 
 ## 文档
 
-- [互动域迁移与切换](docs/interaction_migration.md)
 - [文档导航](docs/README.md)
+- [架构、Redis 与迁移](docs/architecture.md)
+- [测试与覆盖率](docs/testing.md)
 - [项目技术总结](docs/resume_project_summary.md)
 - [可观测性](docs/observability.md)
-- [Grafana 面板](docs/grafana.md)
 - [用户事件契约](docs/user_events.md)
 - [业务错误码](docs/business_codes.md)
 - [开发 TODO](docs/todo-list.md)

@@ -95,7 +95,7 @@ func (s *MongoStore) Init(ctx context.Context) error {
 		return err
 	}
 	if hello.SetName == "" {
-		return errors.New("interaction writes require a MongoDB replica set; see docs/interaction_migration.md")
+		return errors.New("interaction writes require a MongoDB replica set; see docs/architecture.md")
 	}
 	for _, kind := range []string{"LIKE", "COLLECT", "RATE", "COMMENT_LIKE"} {
 		coll, field, _ := Collection(kind)

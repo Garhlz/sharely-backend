@@ -1,112 +1,47 @@
-# User-RPC RabbitMQ 事件定义 (user_events.md)
+# 用户事件契约
 
-本文档定义了 `user-rpc` 服务在状态变更时发布到 RabbitMQ 的事件约定。这些事件基于领域驱动设计（DDD）的发布-订阅模式，用于系统解耦，如搜索索引更新、用户缓存失效、用户动态同步等。
+本文对应 user-rpc 当前实现，不适用互动域的版本化 Outbox 事件。互动事件见 [架构](architecture.md)。
 
-## 1. 交换机与路由配置
+## 路由与载荷
 
-*   **交换机 (Exchange)**: `user.topic.exchange`
-*   **交换机类型 (Type)**: `topic`
-*   **持久化 (Durable)**: `true`
+默认 Topic Exchange 为 `platform.topic.exchange`，路由可由 user-rpc MQ 配置覆盖。消息体是扁平 JSON，没有统一 `payload` 包装。
 
-## 2. 事件类型及路由键
+| 路由 | 消息类型 | 消息体 |
+|---|---|---|
+| `user.update` | `UserUpdateEvent` | `{"userId":123,"newNickname":"昵称","newAvatar":"https://example.com/a.png"}` |
+| `user.delete` | `UserDeleteEvent` | `{"userId":123}` |
 
-所有的事件都应包含标准的追踪字段，以便于在分布式追踪系统（如 Jaeger/Loki）中进行全链路排查。
+类型通过 AMQP Header `__TypeId__` 标识，值分别为：
+- `com.szu.afternoon3.platform.event.UserUpdateEvent`
+- `com.szu.afternoon3.platform.event.UserDeleteEvent`
 
-### 2.1 用户信息更新事件 (`user.update`)
+其他 Header 包括 `X-Request-Id`、`X-Trace-Id`、`X-Service=user-rpc`、`X-Routing-Key`，并注入 OpenTelemetry 上下文。
+这里的自定义 `X-Trace-Id` 使用请求标识，不应直接等同于 OTel Trace ID。
 
-当用户的基本资料（如昵称、头像、简介等）发生更新时触发。
+当前没有独立的用户状态事件。不能按旧文档假设存在 `user.event.*` 或 `user.status.update` 路由。
 
-*   **路由键 (Routing Key)**: `user.event.update`
-*   **触发时机**: `UpdateUserProfile` 或相关信息修改接口成功返回后。
-*   **消费方示例**:
-    *   `interaction-rpc`: 更新互动缓存中的冗余用户头像/昵称。
-    *   `search-rpc`: 更新用户的全文检索索引（如果需要搜用户）。
-    *   `sync-sidecar`: 记录变更审计日志。
+## 消费者
 
-**JSON Payload 结构**:
+| 队列 | 绑定 | 职责 |
+|---|---|---|
+| `platform.user.queue` | `user.#` | Sidecar 更新 MongoDB 冗余用户资料、处理用户删除副作用 |
+| `platform.es.sync.queue` | 包含 `user.update` | Sidecar 更新 ES 文档中的用户资料 |
 
-```json
-{
-  "eventId": "evt_1a2b3c4d5e6f",        // 全局唯一事件ID (UUID)
-  "eventType": "user.update",           // 事件类型标识
-  "timestamp": 1713254400,              // 事件发生时间 (Unix时间戳, 秒)
-  "traceId": "abc123def456ghi789",      // OpenTelemetry Trace ID，用于链路追踪
-  "payload": {
-    "userId": "10001",                  // 发生变更的用户ID
-    "updatedFields": ["nickname", "avatar"], // 明确指出的变更字段列表，方便消费者按需处理
-    "snapshot": {                       // 变更后的完整用户数据快照 (部分敏感字段剔除)
-      "nickname": "新昵称",
-      "avatar": "https://cdn.example.com/avatar/new.png",
-      "signature": "热爱生活",
-      "gender": 1                       // 0:未知, 1:男, 2:女
-    }
-  }
-}
-```
+删用户的具体清理范围以 UserHandler 为准；该事件并不自动保证所有历史互动、通知和外部资源均被清除。
 
-### 2.2 用户删除事件 (`user.delete`)
+## 可靠性边界
 
-当用户主动注销或被管理员强制删除时触发。支持软删除和硬删除标志。
+- 用户资料的数据库变更与 MQ 发布不在同一事务中。
+- 当前 Publisher 未使用 Outbox、Publisher Confirm、mandatory 路由检查或持久消息设置，也没有自动重连。
+- MQ 不可用时，启动阶段可能禁用 Publisher；更新资料发布失败会记录日志，删除路径忽略发布错误。主业务成功不代表副作用一定完成。
+- 消息没有 `eventId` 或业务版本，不能宣称具备互动事件相同的去重与乱序保护。
+- 消费操作的具体幂等性、重试及死信行为需结合消费者检查；修复发布端之前，应保留人工核对与重建手段。
 
-*   **路由键 (Routing Key)**: `user.event.delete`
-*   **触发时机**: 用户账号注销流程完成，或管理员执行硬删除后。
-*   **消费方示例**:
-    *   `comment-rpc`: 隐藏该用户的所有历史评论或标记为“已注销用户”。
-    *   `platform-java`: 删除该用户发布的帖子，或下架相关内容。
-    *   各类缓存: 清理该用户的登录态和所有相关缓存。
+## 代码入口
 
-**JSON Payload 结构**:
-
-```json
-{
-  "eventId": "evt_9z8y7x6w5v4u",
-  "eventType": "user.delete",
-  "timestamp": 1713258000,
-  "traceId": "xyz987wvu654tsr321",
-  "payload": {
-    "userId": "10001",
-    "deleteType": "soft",               // 删除类型: "soft" (软删除/注销), "hard" (硬删除/物理删除)
-    "reason": "用户主动申请注销",          // 删除原因
-    "deleteTime": 1713258000            // 执行删除的时间戳
-  }
-}
-```
-
-### 2.3 用户状态变更事件 (`user.status.update`)
-
-当用户的账户状态发生变更时触发（如封禁、解封、冻结、激活等）。
-
-*   **路由键 (Routing Key)**: `user.event.status.update`
-*   **触发时机**: 管理后台执行封禁/解封操作，或系统风控自动冻结。
-*   **消费方示例**:
-    *   `gateway-api`: 强制令该用户的 JWT Token 失效，踢出登录。
-    *   `notification-rpc`: 发送封禁/解封系统通知。
-
-**JSON Payload 结构**:
-
-```json
-{
-  "eventId": "evt_2b3c4d5e6f7g",
-  "eventType": "user.status.update",
-  "timestamp": 1713261600,
-  "traceId": "def456ghi789jkl012",
-  "payload": {
-    "userId": "10001",
-    "oldStatus": 1,                     // 变更前状态 (如: 1 正常)
-    "newStatus": 2,                     // 变更后状态 (如: 2 封禁, 3 冻结)
-    "reasonCode": "R_SPAM",             // 状态变更的原因编码 (如: R_SPAM 垃圾营销)
-    "reasonDesc": "发布大量垃圾广告",     // 状态变更的原因描述
-    "operatorId": "admin_88",           // 操作人ID (系统自动为 system)
-    "banUntil": 1713866400              // 封禁结束时间戳 (如果为临时封禁，否则为 0 或 null)
-  }
-}
-```
-
-## 3. Go-Zero 消费者接入示例
-
-消费者在 `go-zero` 中通常以基于 RabbitMQ 的 Listener 或使用 go-queue 的 `kq` / custom RabbitMQ 客户端接入。
-
-处理事件时务必：
-1.  **幂等性**: 消费者必须保证处理逻辑的幂等性（基于 `eventId` 或重试机制）。
-2.  **错误处理**: 失败的事件应当进入死信队列 (DLX, Dead Letter Exchange) 进行人工干预或延时重试。
-3.  **链路追踪传递**: 从消息体中提取 `traceId`，并将其注入到消费者处理上下文 (`context.Context`) 中，保证全链路的 Trace 不中断。
+- [载荷定义](../services/user-rpc/internal/event/)
+- [Publisher](../services/user-rpc/internal/mq/publisher.go)
+- [资料更新](../services/user-rpc/internal/logic/updateProfileLogic.go)
+- [删除公共逻辑](../services/user-rpc/internal/logic/user_delete_shared.go)
+- [MongoDB 消费](../services/sync-sidecar/internal/handler/user_handler.go)
+- [ES 消费](../services/sync-sidecar/internal/handler/sync_handler.go)

@@ -58,7 +58,7 @@ curl -X POST 'http://localhost:8090/api/interaction/like/post' \
 - MongoDB 事务同时提交互动明细、统计投影和 Outbox，提交后失效 Redis
 - 后台投递使用持久化消息、mandatory、Confirm，失败保留任务并重连
 - notification-rpc 消费独立队列生成通知，Sidecar 负责 ES 刷新
-- 启动需要 MongoDB 副本集；切换与验证见 [迁移说明](../../docs/interaction_migration.md)
+- 启动需要 MongoDB 副本集；切换与验证见 [迁移说明](../../docs/architecture.md)
 
 ### 用户主页统计
 

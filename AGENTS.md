@@ -39,7 +39,7 @@ Etcd     -> Go RPC 服务发现
 | gateway-api | 8090 |
 | interaction / search / user RPC | 8081 / 8082 / 8083 |
 | notification / comment RPC | 8084 / 8085 |
-| sync-sidecar | 8088 |
+| sync-sidecar | 18088（宿主机）/ 8088（容器） |
 | MySQL / MongoDB / Redis | 3306 / 27017 / 6379 |
 | RabbitMQ / 管理页 | 5672 / 15672 |
 | Elasticsearch / Etcd | 9200 / 2379 |

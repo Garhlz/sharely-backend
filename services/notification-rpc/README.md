@@ -85,7 +85,7 @@ curl 'http://localhost:8090/api/message/unread-count' \
   - 最终通过 gRPC 调用本服务写入通知
 - `interaction-rpc`
   - 通过 Outbox 投递互动事件，本服务查询目标与发送者资料并生成通知
-  - 配置及副本集要求见 [迁移说明](../../docs/interaction_migration.md)
+  - 配置及副本集要求见 [迁移说明](../../docs/architecture.md)
 
 ## 本地运行
 
