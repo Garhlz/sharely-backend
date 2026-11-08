@@ -46,6 +46,7 @@ import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -548,7 +549,8 @@ public class PostServiceImpl implements PostService {
 //        post.setStatus(3); // 建议：状态3表示"已删除/回收站"，区别于 2(审核拒绝)
         // TODO 新增帖子的删除状态，其他地方也要跟着维护
         post.setUpdatedAt(java.time.LocalDateTime.now());
-        postRepository.save(post);
+        mongoTemplate.updateFirst(Query.query(Criteria.where("id").is(postId)),
+                new Update().set("isDeleted", 1).set("updatedAt", post.getUpdatedAt()), PostDoc.class);
 
         // 5. 【增强】发布事件
         // 将必要信息带给 Listener，实现异步解耦
@@ -662,7 +664,17 @@ public class PostServiceImpl implements PostService {
             post.setStatus(auditEnable ? 0 : 1);
         }
         post.setUpdatedAt(java.time.LocalDateTime.now());
-        postRepository.save(post);
+        // 只更新内容字段，避免旧实体覆盖 Go 同步维护的互动统计与版本。
+        org.bson.Document contentFields = new org.bson.Document();
+        mongoTemplate.getConverter().write(post, contentFields);
+        for (String field : java.util.List.of("_id", "_class", "likeCount", "collectCount",
+                "ratingCount", "ratingAverage", "commentCount", "viewCount", "interactionVersion", "isDeleted")) {
+            contentFields.remove(field);
+        }
+        Update contentUpdate = new Update();
+        contentFields.forEach(contentUpdate::set);
+        mongoTemplate.updateFirst(Query.query(Criteria.where("id").is(post.getId()).and("isDeleted").ne(1)),
+                contentUpdate, PostDoc.class);
 
         // 5. 发布事件
         if (needAudit) {

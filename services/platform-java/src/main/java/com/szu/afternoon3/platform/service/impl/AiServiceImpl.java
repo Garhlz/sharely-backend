@@ -27,6 +27,9 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class AiServiceImpl implements AiService {
 
+    @Value("${ai.enabled:true}")
+    private boolean enabled;
+
     @Value("${ai.dashscope.api-key}")
     private String apiKey;
 
@@ -77,6 +80,7 @@ public class AiServiceImpl implements AiService {
      * @param temperature 随机性 (0.0 - 2.0)
      */
     private String callQwenVL(String systemPrompt, String userText, List<String> images, String video, double temperature) {
+        if (!enabled) return null;
         long startTime = System.currentTimeMillis();
         String apiCallName = "QwenVL_Call";
 
