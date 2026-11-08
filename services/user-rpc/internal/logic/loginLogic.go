@@ -31,49 +31,59 @@ func NewLoginLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LoginLogic 
 
 func (l *LoginLogic) Login(in *user.LoginRequest) (*user.AuthResponse, error) {
 	start := time.Now()
+	metricResult := ""
+	defer func() {
+		if metricResult != "" {
+			appmetrics.ObserveAuth("login", metricResult, time.Since(start))
+		}
+	}()
+	// 先做无副作用的输入校验，避免无效请求访问数据库。
 	email := strings.TrimSpace(in.GetEmail())
 	password := in.GetPassword()
 	if email == "" || password == "" {
-		appmetrics.ObserveAuth("login", "invalid_argument", time.Since(start))
+		metricResult = "invalid_argument"
 		return nil, status.Error(codes.InvalidArgument, "email and password are required")
 	}
 
+	// MySQL 保存账号事实数据：依次校验用户是否存在、账号状态和密码哈希。
 	u, err := l.svcCtx.Users.FindOneByEmail(l.ctx, email)
 	if err == model.ErrNotFound {
-		appmetrics.ObserveAuth("login", "user_not_found", time.Since(start))
+		metricResult = "user_not_found"
 		return nil, status.Error(codes.NotFound, "user not found")
 	}
 	if err != nil {
-		appmetrics.ObserveAuth("login", "query_error", time.Since(start))
+		metricResult = "query_error"
 		return nil, status.Error(codes.Internal, "query user failed")
 	}
 	if u.Status != 1 {
-		appmetrics.ObserveAuth("login", "account_disabled", time.Since(start))
+		metricResult = "account_disabled"
 		return nil, status.Error(codes.PermissionDenied, "account disabled")
 	}
 	if !checkPassword(u.Password, password) {
-		appmetrics.ObserveAuth("login", "invalid_password", time.Since(start))
+		metricResult = "invalid_password"
 		return nil, status.Error(codes.Unauthenticated, "invalid password")
 	}
 
+	// Access Token 用于访问接口；Refresh Token 携带唯一 JTI，用于会话续期和单会话撤销。
 	tokens, refreshJti, err := buildTokenPair(l.svcCtx.Config, u)
 	if err != nil {
-		appmetrics.ObserveAuth("login", "token_error", time.Since(start))
+		metricResult = "token_error"
 		return nil, status.Error(codes.Internal, "create token failed")
 	}
+	// Redis 同时记录 Refresh 会话和 tokenVersion，使无状态 JWT 具备可撤销能力。
 	if err := l.svcCtx.Redis.Setex(
 		refreshTokenKey(u.Id, refreshJti),
 		"1",
 		int(l.svcCtx.Config.Jwt.RefreshExpireSeconds),
 	); err != nil {
-		appmetrics.ObserveAuth("login", "store_refresh_error", time.Since(start))
+		metricResult = "store_refresh_error"
 		return nil, status.Error(codes.Internal, "store refresh token failed")
 	}
 	if err := setTokenVersion(l.ctx, l.svcCtx, u.Id, u.TokenVersion); err != nil {
-		appmetrics.ObserveAuth("login", "store_version_error", time.Since(start))
+		metricResult = "store_version_error"
 		return nil, status.Error(codes.Internal, "store token version failed")
 	}
-	appmetrics.ObserveAuth("login", "success", time.Since(start))
+	metricResult = "success"
 
 	return &user.AuthResponse{
 		Tokens: tokens,

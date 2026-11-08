@@ -44,8 +44,8 @@ const (
 	KeyBloomCommentLike = "bloom:comment_likes"
 	KeyBloomPostRate    = "bloom:post_rates"
 
-	// DummyUserId/占位字段用于表示“这个 key 已经被预热过，但当前确实没有真实数据”。
-	// 这样即使 Mongo 查询结果为空，也能在 Redis 中留下一个可见痕迹，避免后续请求持续穿透到 Mongo。
+	// DummyUserId/占位字段用于表示已经查询过 MongoDB，确认当前没有真实点赞数据。
+	// 这样即使 Mongo 查询结果为空，也能在 Redis 中留下一个可见痕迹，避免缓存穿透
 	DummyUserId = "-1"
 
 	// 预热后的互动集合只保留有限时间，避免冷门帖子长期占用 Redis 内存。
@@ -250,70 +250,77 @@ func setCacheMetricKind(spec setCacheSpec) string {
 	}
 }
 
-// ensureSetCacheLoaded 用于预热 Set 结构缓存，如点赞/收藏/评论点赞。
-// 这段逻辑解决的是 write-behind 模式下最危险的问题：
-// 如果 Redis key 因为冷启动或淘汰而消失，直接 SADD/SREM 会把“当前操作”误当成全量数据，
-// 造成 Redis 中只剩新写入的一条记录，历史互动数据在读链路上“蒸发”。
+// ensureSetCacheLoaded 在 Set 缓存缺失时，从 MongoDB 按需回填点赞、收藏等历史互动。
+// 先恢复完整集合再执行本次操作，避免缓存丢失后只保留新互动，导致读取遗漏历史数据。
 func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targetId string, spec setCacheSpec) error {
 	start := time.Now()
 	kind := setCacheMetricKind(spec)
+	metricResult := ""
+	// 统一在结束时记录可观测指标
+	defer func() {
+		if metricResult != "" {
+			appmetrics.ObserveCacheWarm(kind, metricResult, time.Since(start))
+		}
+	}()
+
 	key := spec.redisKeyPrefix + targetId
+
 	exists, err := svcCtx.Redis.ExistsCtx(ctx, key)
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "redis_exists_error", time.Since(start))
+		metricResult = "redis_exists_error"
 		return err
 	}
 	if exists {
 		// key 已存在，说明这个目标的互动集合已经在 Redis 中建立好了，直接使用即可。
-		appmetrics.ObserveCacheWarm(kind, "cache_hit", time.Since(start))
+		metricResult = "cache_hit"
 		return nil
 	}
 
-	// 当前不存在这个redis key
+	// 按缓存 Key 加锁，减少同一目标的并发回源，缓解热点 Key 失效时的缓存击穿。
 	lockKey := KeyCacheWarmLock + key
-	// 当lock key不存在时设置string,有过期时间
+	// 仅在锁不存在时写入，并设置过期时间，避免请求异常退出后锁一直占用。
 	locked, err := svcCtx.Redis.SetnxEx(lockKey, "1", cacheWarmLockSeconds)
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "lock_error", time.Since(start))
+		metricResult = "lock_error"
 		return err
 	}
-	// locked == 0,即没有拿到分布式锁
 	if !locked {
-		// 别的请求正在做预热，本请求短暂等待，尽量复用对方的结果，避免同时打 Mongo。
+		// 未获得锁时，有上限地轮询缓存，尽量复用其他请求的回填结果。
 		for i := 0; i < cacheWarmRetryCount; i++ {
 			time.Sleep(cacheWarmRetryDelay)
 			exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
 			if err != nil {
-				appmetrics.ObserveCacheWarm(kind, "wait_exists_error", time.Since(start))
+				metricResult = "wait_exists_error"
 				return err
 			}
 			if exists {
-				appmetrics.ObserveCacheWarm(kind, "wait_hit", time.Since(start))
+				metricResult = "wait_hit"
 				return nil
 			}
 		}
 	} else {
-		// 当前请求拿到了预热锁，由它负责回源 Mongo 并构建 Redis key。
+		// 获得锁的请求负责回填，并在退出时尝试释放锁。
 		defer func() {
 			_, _ = svcCtx.Redis.DelCtx(ctx, lockKey)
 		}()
 	}
 
-	// 拿到了分布式锁，尝试回查mongo
+	// 再次检查缓存；等待超时的请求也会走到这里，此时不一定持有锁。
 	exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "double_check_error", time.Since(start))
+		metricResult = "double_check_error"
 		return err
 	}
+	// 其他请求已经查好了数据库了，直接返回
 	if exists {
-		appmetrics.ObserveCacheWarm(kind, "double_check_hit", time.Since(start))
+		metricResult = "double_check_hit"
 		return nil
 	}
 
 	if svcCtx.Mongo == nil {
 		// 理论上互动持久化数据来自 Mongo；如果这里没有 Mongo，只能退化为“不预热直接返回”。
 		// 这不是理想状态，但保留了服务可用性。
-		appmetrics.ObserveCacheWarm(kind, "mongo_unavailable", time.Since(start))
+		metricResult = "mongo_unavailable"
 		return nil
 	}
 
@@ -324,12 +331,12 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 	coll := svcCtx.Mongo.Collection(spec.mongoCollection)
 	cursor, err := coll.Find(ctx, bson.M{spec.targetField: targetId}, options.Find().SetProjection(bson.M{"userId": 1}))
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "mongo_find_error", time.Since(start))
+		metricResult = "mongo_find_error"
 		return err
 	}
 	defer cursor.Close(ctx)
 	if err := cursor.All(ctx, &likes); err != nil {
-		appmetrics.ObserveCacheWarm(kind, "mongo_decode_error", time.Since(start))
+		metricResult = "mongo_decode_error"
 		return err
 	}
 
@@ -355,13 +362,13 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 		}
 	}
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "redis_write_error", time.Since(start))
+		metricResult = "redis_write_error"
 		return err
 	}
 
 	// 预热后的 key 统一设置 TTL，避免 Redis 中残留大量长期无人访问的互动集合。
 	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
-	appmetrics.ObserveCacheWarm(kind, "mongo_loaded", time.Since(start))
+	metricResult = "mongo_loaded"
 	return nil
 }
 
@@ -370,21 +377,27 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targetId string, spec hashCacheSpec) error {
 	start := time.Now()
 	kind := "post_rate"
+	metricResult := ""
+	defer func() {
+		if metricResult != "" {
+			appmetrics.ObserveCacheWarm(kind, metricResult, time.Since(start))
+		}
+	}()
 	key := spec.redisKeyPrefix + targetId
 	exists, err := svcCtx.Redis.ExistsCtx(ctx, key)
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "redis_exists_error", time.Since(start))
+		metricResult = "redis_exists_error"
 		return err
 	}
 	if exists {
-		appmetrics.ObserveCacheWarm(kind, "cache_hit", time.Since(start))
+		metricResult = "cache_hit"
 		return nil
 	}
 
 	lockKey := KeyCacheWarmLock + key
 	locked, err := svcCtx.Redis.SetnxEx(lockKey, "1", cacheWarmLockSeconds)
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "lock_error", time.Since(start))
+		metricResult = "lock_error"
 		return err
 	}
 	if !locked {
@@ -393,11 +406,11 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 			time.Sleep(cacheWarmRetryDelay)
 			exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
 			if err != nil {
-				appmetrics.ObserveCacheWarm(kind, "wait_exists_error", time.Since(start))
+				metricResult = "wait_exists_error"
 				return err
 			}
 			if exists {
-				appmetrics.ObserveCacheWarm(kind, "wait_hit", time.Since(start))
+				metricResult = "wait_hit"
 				return nil
 			}
 		}
@@ -409,16 +422,16 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 
 	exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "double_check_error", time.Since(start))
+		metricResult = "double_check_error"
 		return err
 	}
 	if exists {
-		appmetrics.ObserveCacheWarm(kind, "double_check_hit", time.Since(start))
+		metricResult = "double_check_hit"
 		return nil
 	}
 
 	if svcCtx.Mongo == nil {
-		appmetrics.ObserveCacheWarm(kind, "mongo_unavailable", time.Since(start))
+		metricResult = "mongo_unavailable"
 		return nil
 	}
 
@@ -431,12 +444,12 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 	coll := svcCtx.Mongo.Collection(spec.mongoCollection)
 	cursor, err := coll.Find(ctx, bson.M{spec.targetField: targetId}, options.Find().SetProjection(bson.M{"userId": 1, spec.valueField: 1}))
 	if err != nil {
-		appmetrics.ObserveCacheWarm(kind, "mongo_find_error", time.Since(start))
+		metricResult = "mongo_find_error"
 		return err
 	}
 	defer cursor.Close(ctx)
 	if err := cursor.All(ctx, &ratings); err != nil {
-		appmetrics.ObserveCacheWarm(kind, "mongo_decode_error", time.Since(start))
+		metricResult = "mongo_decode_error"
 		return err
 	}
 
@@ -445,12 +458,12 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 		// 这样即便该帖子从未被评分，也能阻止后续请求持续穿透到 Mongo。
 		_, err = svcCtx.Redis.HsetnxCtx(ctx, key, DummyUserId, "0")
 		if err != nil {
-			appmetrics.ObserveCacheWarm(kind, "redis_write_error", time.Since(start))
+			metricResult = "redis_write_error"
 			return err
 		}
 		appmetrics.IncDummyOp(kind, "fill")
 		_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
-		appmetrics.ObserveCacheWarm(kind, "mongo_empty", time.Since(start))
+		metricResult = "mongo_empty"
 		return nil
 	}
 
@@ -458,14 +471,14 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 		// 用一位小数字符串写入 Redis，保证和业务协议中的评分格式一致。
 		scoreStr := strconv.FormatFloat(rating.Score, 'f', 1, 64)
 		if err := svcCtx.Redis.HsetCtx(ctx, key, strconv.FormatInt(rating.UserId, 10), scoreStr); err != nil {
-			appmetrics.ObserveCacheWarm(kind, "redis_write_error", time.Since(start))
+			metricResult = "redis_write_error"
 			return err
 		}
 	}
 	// 评分数据存在时，同样把帖子加入 Bloom，供后续快速判断使用。
 	AddBloom(ctx, svcCtx, spec.bloomKey, targetId)
 	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
-	appmetrics.ObserveCacheWarm(kind, "mongo_loaded", time.Since(start))
+	metricResult = "mongo_loaded"
 	return nil
 }
 

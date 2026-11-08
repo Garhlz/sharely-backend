@@ -30,66 +30,77 @@ func NewRefreshTokenLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Refr
 
 func (l *RefreshTokenLogic) RefreshToken(in *user.RefreshTokenRequest) (*user.AuthResponse, error) {
 	start := time.Now()
+	metricResult := ""
+	defer func() {
+		if metricResult != "" {
+			appmetrics.ObserveAuth("refresh", metricResult, time.Since(start))
+		}
+	}()
 	if in.GetRefreshToken() == "" {
-		appmetrics.ObserveAuth("refresh", "invalid_argument", time.Since(start))
+		metricResult = "invalid_argument"
 		return nil, status.Error(codes.InvalidArgument, "refresh token required")
 	}
 
+	// 签名合法还不够：续期入口只接受带 JTI 的 Refresh Token。
 	claims, err := parseToken(l.svcCtx.Config, in.GetRefreshToken())
 	if err != nil {
-		appmetrics.ObserveAuth("refresh", "invalid_token", time.Since(start))
+		metricResult = "invalid_token"
 		return nil, status.Error(codes.Unauthenticated, "invalid refresh token")
 	}
 	if claims.Type != "refresh" {
-		appmetrics.ObserveAuth("refresh", "invalid_type", time.Since(start))
+		metricResult = "invalid_type"
 		return nil, status.Error(codes.InvalidArgument, "invalid token type")
 	}
 	if claims.ID == "" {
-		appmetrics.ObserveAuth("refresh", "missing_jti", time.Since(start))
+		metricResult = "missing_jti"
 		return nil, status.Error(codes.Unauthenticated, "invalid refresh token")
 	}
 
+	// 黑名单支持在 Token 自然过期前主动撤销。
 	blocked, err := l.svcCtx.Redis.ExistsCtx(l.ctx, blockedTokenKey(in.GetRefreshToken()))
 	if err != nil {
-		appmetrics.ObserveAuth("refresh", "blocked_check_error", time.Since(start))
+		metricResult = "blocked_check_error"
 		return nil, status.Error(codes.Internal, "refresh token check failed")
 	}
 	if blocked {
-		appmetrics.ObserveAuth("refresh", "blocked", time.Since(start))
+		metricResult = "blocked"
 		return nil, status.Error(codes.Unauthenticated, "refresh token revoked")
 	}
 
+	// 数据库中的 tokenVersion 是账号级版本；登出或改密后旧版本 Token 全部失效。
 	u, err := l.svcCtx.Users.FindOne(l.ctx, claims.UserId)
 	if err == model.ErrNotFound {
-		appmetrics.ObserveAuth("refresh", "user_not_found", time.Since(start))
+		metricResult = "user_not_found"
 		return nil, status.Error(codes.NotFound, "user not found")
 	}
 	if err != nil {
-		appmetrics.ObserveAuth("refresh", "query_error", time.Since(start))
+		metricResult = "query_error"
 		return nil, status.Error(codes.Internal, "query user failed")
 	}
 	if u.Status != 1 {
-		appmetrics.ObserveAuth("refresh", "account_disabled", time.Since(start))
+		metricResult = "account_disabled"
 		return nil, status.Error(codes.PermissionDenied, "account disabled")
 	}
 	if u.TokenVersion != claims.TokenVersion {
-		appmetrics.ObserveAuth("refresh", "token_revoked", time.Since(start))
+		metricResult = "token_revoked"
 		return nil, status.Error(codes.Unauthenticated, "token revoked")
 	}
 
+	// JTI 对应 Redis 中的一次登录会话，不存在说明该 Refresh Token 已被消费或撤销。
 	ok, err := l.svcCtx.Redis.ExistsCtx(l.ctx, refreshTokenKey(claims.UserId, claims.ID))
 	if err != nil {
-		appmetrics.ObserveAuth("refresh", "refresh_check_error", time.Since(start))
+		metricResult = "refresh_check_error"
 		return nil, status.Error(codes.Internal, "refresh token check failed")
 	}
 	if !ok {
-		appmetrics.ObserveAuth("refresh", "refresh_revoked", time.Since(start))
+		metricResult = "refresh_revoked"
 		return nil, status.Error(codes.Unauthenticated, "refresh token revoked")
 	}
 
+	// 采用 Refresh Token Rotation：签发新双 Token 后删除旧 JTI。
 	tokens, refreshJti, err := buildTokenPair(l.svcCtx.Config, u)
 	if err != nil {
-		appmetrics.ObserveAuth("refresh", "token_error", time.Since(start))
+		metricResult = "token_error"
 		return nil, status.Error(codes.Internal, "create token failed")
 	}
 	if err := l.svcCtx.Redis.Setex(
@@ -97,15 +108,15 @@ func (l *RefreshTokenLogic) RefreshToken(in *user.RefreshTokenRequest) (*user.Au
 		"1",
 		int(l.svcCtx.Config.Jwt.RefreshExpireSeconds),
 	); err != nil {
-		appmetrics.ObserveAuth("refresh", "store_refresh_error", time.Since(start))
+		metricResult = "store_refresh_error"
 		return nil, status.Error(codes.Internal, "store refresh token failed")
 	}
 	if err := setTokenVersion(l.ctx, l.svcCtx, u.Id, u.TokenVersion); err != nil {
-		appmetrics.ObserveAuth("refresh", "store_version_error", time.Since(start))
+		metricResult = "store_version_error"
 		return nil, status.Error(codes.Internal, "store token version failed")
 	}
 	_, _ = l.svcCtx.Redis.DelCtx(l.ctx, refreshTokenKey(claims.UserId, claims.ID))
-	appmetrics.ObserveAuth("refresh", "success", time.Since(start))
+	metricResult = "success"
 
 	return &user.AuthResponse{
 		Tokens: tokens,
