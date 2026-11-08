@@ -15,4 +15,10 @@ type Config struct {
 		Uri      string
 		Database string
 	}
+	RabbitMQ struct {
+		DataSource string `json:",optional"`
+	} `json:",optional"`
+	Mysql struct {
+		DataSource string `json:",optional"`
+	} `json:",optional"`
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"notification-rpc/internal/config"
+	"notification-rpc/internal/consumer"
 	appmetrics "notification-rpc/internal/metrics"
 	"notification-rpc/internal/server"
 	"notification-rpc/internal/svc"
@@ -42,6 +43,11 @@ func main() {
 	// ServiceContext 负责初始化 notification-rpc 运行时依赖。
 	// 当前这个服务的核心依赖比较简单，主要就是 MongoDB。
 	ctx := svc.NewServiceContext(c)
+	consumerCtx, stopConsumer := context.WithCancel(context.Background())
+	defer stopConsumer()
+	if c.RabbitMQ.DataSource != "" {
+		go consumer.Run(consumerCtx, ctx.Mongo, c.RabbitMQ.DataSource, c.Mysql.DataSource)
+	}
 
 	// 按现有 Go 服务的约定，notification-rpc 单独起一个 metrics HTTP 服务，
 	// 避免和 zRPC 主端口耦合，方便 Prometheus 直接抓取。

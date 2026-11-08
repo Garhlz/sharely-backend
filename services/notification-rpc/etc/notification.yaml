@@ -11,3 +11,7 @@ Metrics:
 Mongo:
   Uri: "mongodb://mongo:27017"
   Database: "rednote"
+RabbitMQ:
+  DataSource: "${NOTIFICATION_RABBITMQ_URL}"
+Mysql:
+  DataSource: "${NOTIFICATION_MYSQL_DSN}"

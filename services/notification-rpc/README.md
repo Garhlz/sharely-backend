@@ -74,15 +74,18 @@ curl 'http://localhost:8090/api/message/unread-count' \
 - 用“通知类型分层”解决了消息中心最常见的刷屏问题
 - Partial unique index 只约束状态型通知，兼顾幂等性和业务语义
 - 面向迁移老数据的环境，唯一索引失败不会直接把服务启动打崩
-- Java listener 仍负责通知语义生成，但最终写入已收口到独立服务，拆分路径平滑
+- 互动通知由本服务消费独立队列生成，eventId 收据与通知同事务提交
 
 ## 与其他服务的关系
 
 - `gateway-api`
   - 直接读取通知未读数和通知列表
 - `platform-java`
-  - 负责消费互动/评论/审核事件并组装通知语义
+  - 保留关注、评论、审核等通知编排
   - 最终通过 gRPC 调用本服务写入通知
+- `interaction-rpc`
+  - 通过 Outbox 投递互动事件，本服务查询目标与发送者资料并生成通知
+  - 配置及副本集要求见 [迁移说明](../../docs/interaction_migration.md)
 
 ## 本地运行
 

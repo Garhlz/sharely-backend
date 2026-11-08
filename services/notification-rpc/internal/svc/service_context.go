@@ -32,7 +32,21 @@ func NewServiceContext(c config.Config) *ServiceContext {
 			dbName = "rednote"
 		}
 		mongoDb = client.Database(dbName)
-		ensureNotificationIndexes(mongoDb)
+		if c.RabbitMQ.DataSource != "" {
+			if c.Mysql.DataSource == "" {
+				panic("Mysql.DataSource is required for interaction notifications")
+			}
+			var hello struct {
+				SetName string `bson:"setName"`
+			}
+			if err := mongoDb.RunCommand(context.Background(), bson.M{"hello": 1}).Decode(&hello); err != nil {
+				panic(err)
+			}
+			if hello.SetName == "" {
+				panic("interaction notifications require a MongoDB replica set")
+			}
+		}
+		ensureNotificationIndexes(mongoDb, c.RabbitMQ.DataSource != "")
 	}
 
 	return &ServiceContext{
@@ -41,7 +55,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	}
 }
 
-func ensureNotificationIndexes(db *mongo.Database) {
+func ensureNotificationIndexes(db *mongo.Database, requireUnique bool) {
 	ctx := context.Background()
 	_, err := db.Collection("notifications").Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{
@@ -79,6 +93,9 @@ func ensureNotificationIndexes(db *mongo.Database) {
 	})
 	if err != nil {
 		// 老环境里如果已经存在重复的状态型通知数据，唯一索引会创建失败。
+		if requireUnique {
+			panic("interaction notifications require uk_notifications_state_key: " + err.Error())
+		}
 		// 这里记录告警但不阻断服务启动，让读写接口和清洗接口仍然可用。
 		log.Printf("warning: failed to create notification unique index uk_notifications_state_key: %v", err)
 	}
