@@ -11,9 +11,9 @@ import (
 	"user-rpc/user"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -67,10 +67,8 @@ func testAuthConfig() config.Config {
 func newAuthTestContext(t *testing.T, users svc.UsersStore) (*svc.ServiceContext, *miniredis.Miniredis) {
 	t.Helper()
 	server := miniredis.RunT(t)
-	client := redis.MustNewRedis(redis.RedisConf{
-		Host: server.Addr(),
-		Type: "node",
-	})
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
 	return &svc.ServiceContext{
 		Config: testAuthConfig(),
 		Redis:  client,

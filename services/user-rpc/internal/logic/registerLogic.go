@@ -11,8 +11,8 @@ import (
 	"user-rpc/internal/svc"
 	"user-rpc/user"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -48,7 +48,7 @@ func (l *RegisterLogic) Register(in *user.RegisterRequest) (*user.AuthResponse, 
 		return nil, status.Error(codes.InvalidArgument, "email, code and password are required")
 	}
 
-	cached, err := l.svcCtx.Redis.GetCtx(l.ctx, emailCodeKey(emailSceneRegister, email))
+	cached, err := l.svcCtx.Redis.Get(l.ctx, emailCodeKey(emailSceneRegister, email)).Result()
 	if err != nil && err != redis.Nil {
 		metricResult = "verify_code_error"
 		return nil, status.Error(codes.Internal, "verify code error")
@@ -109,11 +109,7 @@ func (l *RegisterLogic) Register(in *user.RegisterRequest) (*user.AuthResponse, 
 		metricResult = "token_error"
 		return nil, status.Error(codes.Internal, "create token failed")
 	}
-	if err := l.svcCtx.Redis.Setex(
-		refreshTokenKey(userData.Id, refreshJti),
-		"1",
-		int(l.svcCtx.Config.Jwt.RefreshExpireSeconds),
-	); err != nil {
+	if err := l.svcCtx.Redis.SetEx(l.ctx, refreshTokenKey(userData.Id, refreshJti), "1", time.Duration(l.svcCtx.Config.Jwt.RefreshExpireSeconds)*time.Second).Err(); err != nil {
 		metricResult = "store_refresh_error"
 		return nil, status.Error(codes.Internal, "store refresh token failed")
 	}
@@ -122,7 +118,7 @@ func (l *RegisterLogic) Register(in *user.RegisterRequest) (*user.AuthResponse, 
 		return nil, status.Error(codes.Internal, "store token version failed")
 	}
 
-	_, _ = l.svcCtx.Redis.Del(emailCodeKey(emailSceneRegister, email))
+	_, _ = l.svcCtx.Redis.Del(l.ctx, emailCodeKey(emailSceneRegister, email)).Result()
 	metricResult = "success"
 
 	return &user.AuthResponse{

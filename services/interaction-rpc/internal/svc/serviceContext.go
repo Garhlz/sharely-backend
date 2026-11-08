@@ -4,12 +4,10 @@ import (
 	"context"
 	"interaction-rpc/internal/config"
 	"interaction-rpc/internal/store"
-	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx" // 用于打印日志
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -19,26 +17,14 @@ type ServiceContext struct {
 	Config config.Config
 
 	// 1. 定义 Redis 客户端变量
-	Redis    *redis.Redis
-	RawRedis *goredis.Client
+	Redis goredis.UniversalClient
 
 	Mongo        *mongo.Database
 	Interactions store.Writer
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
-	// A. 初始化 BizRedis
-	// MustNewRedis 意味着如果连不上(比如配置错了)，程序直接崩溃报错，防止带病运行
-	redisClient := redis.MustNewRedis(c.BizRedis)
-	addr := strings.TrimSpace(c.BizRedis.Host)
-	if addr == "" {
-		panic("BizRedis.Host is required")
-	}
-	rawRedis := goredis.NewClient(&goredis.Options{
-		Addr:     addr,
-		Password: c.BizRedis.Pass,
-		DB:       0,
-	})
+	redisClient := config.NewRedisClient(c.BizRedis)
 
 	var mongoDb *mongo.Database
 	if c.Mongo.Uri != "" {
@@ -67,7 +53,6 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	return &ServiceContext{
 		Config:       c,
 		Redis:        redisClient,
-		RawRedis:     rawRedis,
 		Mongo:        mongoDb,
 		Interactions: writer,
 	}

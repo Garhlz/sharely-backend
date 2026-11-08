@@ -39,6 +39,7 @@ func main() {
 	}()
 	logx.AddGlobalFields(logx.Field("service", "user-rpc"))
 	ctx := svc.NewServiceContext(c)
+	defer ctx.Redis.Close()
 	appmetrics.StartServer(c.Metrics.Host, c.Metrics.Port, c.Metrics.Path)
 
 	s := zrpc.MustNewServer(c.RpcServerConf, func(grpcServer *grpc.Server) {

@@ -228,7 +228,7 @@ func blockedTokenKey(token string) string {
 
 func setTokenVersion(ctx context.Context, svcCtx *svc.ServiceContext, userId int64, version int64) error {
 	// 网关读取该值，并与 JWT Claims 中的版本进行比较。
-	return svcCtx.Redis.SetCtx(ctx, tokenVersionKey(userId), strconv.FormatInt(version, 10))
+	return svcCtx.Redis.Set(ctx, tokenVersionKey(userId), strconv.FormatInt(version, 10), 0).Err()
 }
 
 func randCode() (string, error) {

@@ -42,7 +42,7 @@ func (l *SendEmailCodeLogic) SendEmailCode(in *user.SendEmailCodeRequest) (*user
 	}
 
 	limitKey := emailLimitKey(scene, email)
-	allowed, err := l.svcCtx.Redis.SetnxEx(limitKey, "1", 60)
+	allowed, err := l.svcCtx.Redis.SetNX(l.ctx, limitKey, "1", time.Minute).Result()
 	if err != nil {
 		appmetrics.IncEmailCode(scene, "limit_check_error")
 		return nil, status.Error(codes.Internal, "rate limit error")
@@ -61,13 +61,13 @@ func (l *SendEmailCodeLogic) SendEmailCode(in *user.SendEmailCodeRequest) (*user
 	body := "您的验证码是：" + code + "。有效期为5分钟，请勿泄露给他人。"
 	if err := sendEmail(l.svcCtx.Config, email, subject, body); err != nil {
 		l.Logger.Errorf("send email failed: %s", err)
-		_, _ = l.svcCtx.Redis.Del(limitKey)
+		_, _ = l.svcCtx.Redis.Del(l.ctx, limitKey).Result()
 		appmetrics.IncEmailCode(scene, "send_mail_error")
 		return nil, status.Errorf(codes.Internal, "mail send failed: %s", err)
 	}
 
 	codeKey := emailCodeKey(scene, email)
-	if err := l.svcCtx.Redis.Setex(codeKey, code, int(time.Minute.Seconds()*5)); err != nil {
+	if err := l.svcCtx.Redis.SetEx(l.ctx, codeKey, code, 5*time.Minute).Err(); err != nil {
 		appmetrics.IncEmailCode(scene, "store_code_error")
 		return nil, status.Error(codes.Internal, "store code failed")
 	}

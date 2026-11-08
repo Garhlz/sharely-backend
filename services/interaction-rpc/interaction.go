@@ -40,6 +40,7 @@ func main() {
 	}()
 	logx.AddGlobalFields(logx.Field("service", "interaction-rpc"))
 	ctx := svc.NewServiceContext(c)
+	defer ctx.Redis.Close()
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
 	go ctx.Interactions.(*store.MongoStore).RunOutbox(workerCtx, c.RabbitMQ.DataSource)

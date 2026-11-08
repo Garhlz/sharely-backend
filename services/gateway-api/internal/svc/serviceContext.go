@@ -11,7 +11,7 @@ import (
 	"gateway-api/internal/pkg/ctxutil"
 	"gateway-api/internal/telemetry"
 
-	"github.com/zeromicro/go-zero/core/stores/redis"
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/zrpc"
 	"go.opentelemetry.io/otel"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -26,7 +26,7 @@ type ServiceContext struct {
 	InteractionRpc  zrpc.Client
 	NotificationRpc zrpc.Client
 	CommentRpc      zrpc.Client
-	Redis           *redis.Redis
+	Redis           redis.UniversalClient
 	JavaHttpClient  *http.Client
 	// JavaApiBaseUrl 是 Java 主业务服务的入口地址。
 	// 当前项目里，很多帖子/评论/通知/后台接口仍然由 Java 负责，网关需要反向代理到这里。
@@ -102,7 +102,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		InteractionRpc:  interactionClient,
 		NotificationRpc: notificationClient,
 		CommentRpc:      commentClient,
-		Redis:           redis.MustNewRedis(c.Redis),
+		Redis:           config.NewRedisClient(c.Redis),
 		JavaHttpClient:  &http.Client{Timeout: timeout, Transport: transport},
 		JavaApiBaseUrl:  javaBaseURL,
 	}

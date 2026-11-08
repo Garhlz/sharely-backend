@@ -6,7 +6,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"interaction-rpc/interaction"
 	"interaction-rpc/internal/store"
 	"interaction-rpc/internal/svc"
@@ -18,7 +17,7 @@ func newInteractionTestContext(t *testing.T) (*svc.ServiceContext, *miniredis.Mi
 	server := miniredis.RunT(t)
 	raw := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = raw.Close() })
-	return &svc.ServiceContext{Redis: redis.MustNewRedis(redis.RedisConf{Host: server.Addr(), Type: "node"}), RawRedis: raw}, server
+	return &svc.ServiceContext{Redis: raw}, server
 }
 
 type fakeWriter struct {

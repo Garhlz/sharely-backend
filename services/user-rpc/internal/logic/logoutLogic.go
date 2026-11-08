@@ -42,7 +42,7 @@ func (l *LogoutLogic) Logout(in *user.LogoutRequest) (*user.Empty, error) {
 		if ttl <= 0 {
 			return
 		}
-		_ = l.svcCtx.Redis.Setex(blockedTokenKey(token), "1", int(ttl))
+		_ = l.svcCtx.Redis.SetEx(l.ctx, blockedTokenKey(token), "1", time.Duration(int(ttl))*time.Second).Err()
 	}
 
 	blockToken(in.GetAccessToken())
@@ -52,7 +52,7 @@ func (l *LogoutLogic) Logout(in *user.LogoutRequest) (*user.Empty, error) {
 		// 删除当前 Refresh JTI，阻止该会话继续轮换 Token。
 		claims, err := parseToken(l.svcCtx.Config, in.GetRefreshToken())
 		if err == nil && claims.Type == "refresh" && claims.ID != "" {
-			_, _ = l.svcCtx.Redis.DelCtx(l.ctx, refreshTokenKey(claims.UserId, claims.ID))
+			_, _ = l.svcCtx.Redis.Del(l.ctx, refreshTokenKey(claims.UserId, claims.ID)).Result()
 		}
 	}
 

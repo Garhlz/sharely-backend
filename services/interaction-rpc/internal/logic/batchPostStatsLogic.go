@@ -82,13 +82,13 @@ func (l *BatchPostStatsLogic) BatchPostStats(in *interaction.BatchPostStatsReque
 
 		if userId > 0 {
 			// 对当前登录用户，直接判断其 userId 是否存在于目标 Set 中，即可得到是否点赞/收藏。
-			member, err := l.svcCtx.Redis.SismemberCtx(l.ctx, KeyPostCollectSet+postId, userIdStr)
+			member, err := l.svcCtx.Redis.SIsMember(l.ctx, KeyPostCollectSet+postId, userIdStr).Result()
 			if err != nil {
 				l.Logger.Errorf("collect status error: %v", err)
 			} else {
 				stats[postId].IsCollected = member
 			}
-			liked, err := l.svcCtx.Redis.SismemberCtx(l.ctx, KeyPostLikeSet+postId, userIdStr)
+			liked, err := l.svcCtx.Redis.SIsMember(l.ctx, KeyPostLikeSet+postId, userIdStr).Result()
 			if err != nil {
 				l.Logger.Errorf("like status error: %v", err)
 			} else {
@@ -96,7 +96,7 @@ func (l *BatchPostStatsLogic) BatchPostStats(in *interaction.BatchPostStatsReque
 			}
 			// 我的评分来自评分 Hash 中 userId 对应的 field。
 			// 如果查不到，说明当前用户还没给这篇帖子打过分。
-			score, err := l.svcCtx.Redis.HgetCtx(l.ctx, KeyPostRateHash+postId, userIdStr)
+			score, err := l.svcCtx.Redis.HGet(l.ctx, KeyPostRateHash+postId, userIdStr).Result()
 			if err != nil {
 				l.Logger.Errorf("rate status error: %v", err)
 			} else if parsed, parseErr := strconv.ParseFloat(score, 64); parseErr == nil {

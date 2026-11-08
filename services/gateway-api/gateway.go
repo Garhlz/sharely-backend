@@ -64,6 +64,7 @@ func main() {
 	// 2. Redis
 	// 3. Java 代理用的 HTTP Client
 	ctx := svc.NewServiceContext(c)
+	defer ctx.Redis.Close()
 	// metrics server 独立监听一个专门端口，只对 Prometheus 暴露 /metrics。
 	// 这样不会和业务接口、鉴权逻辑混在一起。
 	appmetrics.StartServer(c.Metrics.Host, c.Metrics.Port, c.Metrics.Path)

@@ -57,12 +57,12 @@ func (l *RefreshTokenLogic) RefreshToken(in *user.RefreshTokenRequest) (*user.Au
 	}
 
 	// 黑名单支持在 Token 自然过期前主动撤销。
-	blocked, err := l.svcCtx.Redis.ExistsCtx(l.ctx, blockedTokenKey(in.GetRefreshToken()))
+	blocked, err := l.svcCtx.Redis.Exists(l.ctx, blockedTokenKey(in.GetRefreshToken())).Result()
 	if err != nil {
 		metricResult = "blocked_check_error"
 		return nil, status.Error(codes.Internal, "refresh token check failed")
 	}
-	if blocked {
+	if blocked > 0 {
 		metricResult = "blocked"
 		return nil, status.Error(codes.Unauthenticated, "refresh token revoked")
 	}
@@ -87,12 +87,12 @@ func (l *RefreshTokenLogic) RefreshToken(in *user.RefreshTokenRequest) (*user.Au
 	}
 
 	// JTI 对应 Redis 中的一次登录会话，不存在说明该 Refresh Token 已被消费或撤销。
-	ok, err := l.svcCtx.Redis.ExistsCtx(l.ctx, refreshTokenKey(claims.UserId, claims.ID))
+	ok, err := l.svcCtx.Redis.Exists(l.ctx, refreshTokenKey(claims.UserId, claims.ID)).Result()
 	if err != nil {
 		metricResult = "refresh_check_error"
 		return nil, status.Error(codes.Internal, "refresh token check failed")
 	}
-	if !ok {
+	if ok == 0 {
 		metricResult = "refresh_revoked"
 		return nil, status.Error(codes.Unauthenticated, "refresh token revoked")
 	}
@@ -103,11 +103,7 @@ func (l *RefreshTokenLogic) RefreshToken(in *user.RefreshTokenRequest) (*user.Au
 		metricResult = "token_error"
 		return nil, status.Error(codes.Internal, "create token failed")
 	}
-	if err := l.svcCtx.Redis.Setex(
-		refreshTokenKey(u.Id, refreshJti),
-		"1",
-		int(l.svcCtx.Config.Jwt.RefreshExpireSeconds),
-	); err != nil {
+	if err := l.svcCtx.Redis.SetEx(l.ctx, refreshTokenKey(u.Id, refreshJti), "1", time.Duration(l.svcCtx.Config.Jwt.RefreshExpireSeconds)*time.Second).Err(); err != nil {
 		metricResult = "store_refresh_error"
 		return nil, status.Error(codes.Internal, "store refresh token failed")
 	}
@@ -115,7 +111,7 @@ func (l *RefreshTokenLogic) RefreshToken(in *user.RefreshTokenRequest) (*user.Au
 		metricResult = "store_version_error"
 		return nil, status.Error(codes.Internal, "store token version failed")
 	}
-	_, _ = l.svcCtx.Redis.DelCtx(l.ctx, refreshTokenKey(claims.UserId, claims.ID))
+	_, _ = l.svcCtx.Redis.Del(l.ctx, refreshTokenKey(claims.UserId, claims.ID)).Result()
 	metricResult = "success"
 
 	return &user.AuthResponse{

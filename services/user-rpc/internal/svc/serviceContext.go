@@ -6,8 +6,8 @@ import (
 	"user-rpc/internal/model"
 	"user-rpc/internal/mq"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
 )
 
@@ -22,7 +22,7 @@ type UsersStore interface {
 type ServiceContext struct {
 	Config    config.Config
 	Db        sqlx.SqlConn
-	Redis     *redis.Redis
+	Redis     redis.UniversalClient
 	Users     UsersStore
 	Publisher *mq.Publisher
 }
@@ -37,7 +37,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	return &ServiceContext{
 		Config:    c,
 		Db:        db,
-		Redis:     redis.MustNewRedis(c.BizRedis),
+		Redis:     config.NewRedisClient(c.BizRedis),
 		Users:     model.NewUsersExtendedModel(db),
 		Publisher: publisher,
 	}

@@ -11,7 +11,7 @@ import (
 	"gateway-api/internal/response"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/zeromicro/go-zero/core/stores/redis"
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/rest"
 	"github.com/zeromicro/go-zero/rest/httpx"
 )
@@ -27,7 +27,7 @@ type authClaims struct {
 
 const tokenVersionKeyPrefix = "auth:token:version:"
 
-func NewAuthMiddleware(cfg config.Config, redisClient *redis.Redis) rest.Middleware {
+func NewAuthMiddleware(cfg config.Config, redisClient redis.UniversalClient) rest.Middleware {
 	secret := []byte(cfg.Jwt.Secret)
 	patterns := cfg.Jwt.IgnorePatterns
 	// 如果开启了 token version 校验，网关会去 Redis 读取当前用户的 tokenVersion，
@@ -103,7 +103,7 @@ func NewAuthMiddleware(cfg config.Config, redisClient *redis.Redis) rest.Middlew
 				// 这里是“JWT + Redis tokenVersion”组合方案的关键：
 				// 即便 token 签名正确，只要 Redis 里的最新版本号已经变化，旧 token 也会立即失效。
 				key := fmt.Sprintf("%s%d", tokenVersionKeyPrefix, claims.UserId)
-				value, err := redisClient.GetCtx(r.Context(), key)
+				value, err := redisClient.Get(r.Context(), key).Result()
 				if err != nil {
 					httpx.ErrorCtx(r.Context(), w, response.TokenExpired())
 					return
@@ -170,12 +170,12 @@ func refreshTokenFromRequest(r *http.Request) string {
 
 // tokenVersionOk 仅用于公开路径上的弱校验。
 // 如果这里返回 false，网关不会报错，而是把请求当成匿名访问。
-func tokenVersionOk(ctx context.Context, redisClient *redis.Redis, claims *authClaims) bool {
+func tokenVersionOk(ctx context.Context, redisClient redis.UniversalClient, claims *authClaims) bool {
 	if redisClient == nil || claims == nil {
 		return false
 	}
 	key := fmt.Sprintf("%s%d", tokenVersionKeyPrefix, claims.UserId)
-	value, err := redisClient.GetCtx(ctx, key)
+	value, err := redisClient.Get(ctx, key).Result()
 	if err != nil {
 		return false
 	}

@@ -219,12 +219,12 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 
 	key := spec.redisKeyPrefix + targetId
 
-	exists, err := svcCtx.Redis.ExistsCtx(ctx, key)
+	exists, err := svcCtx.Redis.Exists(ctx, key).Result()
 	if err != nil {
 		metricResult = "redis_exists_error"
 		return err
 	}
-	if exists {
+	if exists > 0 {
 		// key 已存在，说明这个目标的互动集合已经在 Redis 中建立好了，直接使用即可。
 		metricResult = "cache_hit"
 		return nil
@@ -233,7 +233,7 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 	// 按缓存 Key 加锁，减少同一目标的并发回源，缓解热点 Key 失效时的缓存击穿。
 	lockKey := KeyCacheWarmLock + key
 	// 仅在锁不存在时写入，并设置过期时间，避免请求异常退出后锁一直占用。
-	locked, err := svcCtx.Redis.SetnxEx(lockKey, "1", cacheWarmLockSeconds)
+	locked, err := svcCtx.Redis.SetNX(ctx, lockKey, "1", time.Duration(cacheWarmLockSeconds)*time.Second).Result()
 	if err != nil {
 		metricResult = "lock_error"
 		return err
@@ -242,12 +242,12 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 		// 未获得锁时，有上限地轮询缓存，尽量复用其他请求的回填结果。
 		for i := 0; i < cacheWarmRetryCount; i++ {
 			time.Sleep(cacheWarmRetryDelay)
-			exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
+			exists, err = svcCtx.Redis.Exists(ctx, key).Result()
 			if err != nil {
 				metricResult = "wait_exists_error"
 				return err
 			}
-			if exists {
+			if exists > 0 {
 				metricResult = "wait_hit"
 				return nil
 			}
@@ -255,18 +255,18 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 	} else {
 		// 获得锁的请求负责回填，并在退出时尝试释放锁。
 		defer func() {
-			_, _ = svcCtx.Redis.DelCtx(ctx, lockKey)
+			_, _ = svcCtx.Redis.Del(ctx, lockKey).Result()
 		}()
 	}
 
 	// 再次检查缓存；等待超时的请求也会走到这里，此时不一定持有锁。
-	exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
+	exists, err = svcCtx.Redis.Exists(ctx, key).Result()
 	if err != nil {
 		metricResult = "double_check_error"
 		return err
 	}
 	// 其他请求已经查好了数据库了，直接返回
-	if exists {
+	if exists > 0 {
 		metricResult = "double_check_hit"
 		return nil
 	}
@@ -303,7 +303,7 @@ func ensureSetCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targe
 			args = append(args, strconv.FormatInt(like.UserId, 10))
 		}
 	}
-	_, err = svcCtx.Redis.EvalCtx(ctx, fillSetScript, []string{key}, args...)
+	_, err = svcCtx.Redis.Eval(ctx, fillSetScript, []string{key}, args...).Result()
 	if err != nil {
 		metricResult = "redis_write_error"
 		return err
@@ -327,18 +327,18 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 		}
 	}()
 	key := spec.redisKeyPrefix + targetId
-	exists, err := svcCtx.Redis.ExistsCtx(ctx, key)
+	exists, err := svcCtx.Redis.Exists(ctx, key).Result()
 	if err != nil {
 		metricResult = "redis_exists_error"
 		return err
 	}
-	if exists {
+	if exists > 0 {
 		metricResult = "cache_hit"
 		return nil
 	}
 
 	lockKey := KeyCacheWarmLock + key
-	locked, err := svcCtx.Redis.SetnxEx(lockKey, "1", cacheWarmLockSeconds)
+	locked, err := svcCtx.Redis.SetNX(ctx, lockKey, "1", time.Duration(cacheWarmLockSeconds)*time.Second).Result()
 	if err != nil {
 		metricResult = "lock_error"
 		return err
@@ -347,28 +347,28 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 		// 其他请求正在预热评分缓存，这里做短暂自旋等待，尽量避免并发回源。
 		for i := 0; i < cacheWarmRetryCount; i++ {
 			time.Sleep(cacheWarmRetryDelay)
-			exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
+			exists, err = svcCtx.Redis.Exists(ctx, key).Result()
 			if err != nil {
 				metricResult = "wait_exists_error"
 				return err
 			}
-			if exists {
+			if exists > 0 {
 				metricResult = "wait_hit"
 				return nil
 			}
 		}
 	} else {
 		defer func() {
-			_, _ = svcCtx.Redis.DelCtx(ctx, lockKey)
+			_, _ = svcCtx.Redis.Del(ctx, lockKey).Result()
 		}()
 	}
 
-	exists, err = svcCtx.Redis.ExistsCtx(ctx, key)
+	exists, err = svcCtx.Redis.Exists(ctx, key).Result()
 	if err != nil {
 		metricResult = "double_check_error"
 		return err
 	}
-	if exists {
+	if exists > 0 {
 		metricResult = "double_check_hit"
 		return nil
 	}
@@ -404,7 +404,7 @@ func ensureHashCacheLoaded(ctx context.Context, svcCtx *svc.ServiceContext, targ
 			args = append(args, strconv.FormatInt(rating.UserId, 10), strconv.FormatFloat(rating.Score, 'f', 1, 64))
 		}
 	}
-	_, err = svcCtx.Redis.EvalCtx(ctx, fillHashScript, []string{key}, args...)
+	_, err = svcCtx.Redis.Eval(ctx, fillHashScript, []string{key}, args...).Result()
 	if err != nil {
 		metricResult = "redis_write_error"
 		return err
@@ -437,45 +437,46 @@ func ShouldLoadHashCache(ctx context.Context, svcCtx *svc.ServiceContext, target
 // 让上层走保守兜底逻辑，而不是直接返回 false 造成假阴性。
 func CheckBloom(ctx context.Context, svcCtx *svc.ServiceContext, bloomKey string, value string) (bool, bool) {
 	kind := bloomMetricKind(bloomKey)
-	if svcCtx.RawRedis == nil {
+	if svcCtx.Redis == nil {
 		appmetrics.IncBloomCheck(kind, "client_unavailable")
 		return false, false
 	}
 
-	keyExists, err := svcCtx.RawRedis.Exists(ctx, bloomKey).Result()
+	keyExists, err := svcCtx.Redis.Exists(ctx, bloomKey).Result()
 	if err != nil || keyExists == 0 {
 		appmetrics.IncBloomCheck(kind, "unavailable")
 		return false, false
 	}
 
-	res, err := svcCtx.RawRedis.Do(ctx, "BF.EXISTS", bloomKey, value).Int64()
+	// RESP2 使用整数、RESP3 可能使用布尔回复，Bool 同时兼容两种协议。
+	res, err := svcCtx.Redis.Do(ctx, "BF.EXISTS", bloomKey, value).Bool()
 	if err != nil {
 		appmetrics.IncBloomCheck(kind, "command_error")
 		return false, false
 	}
-	if res == 1 {
+	if res {
 		appmetrics.IncBloomCheck(kind, "hit")
 	} else {
 		appmetrics.IncBloomCheck(kind, "miss")
 	}
 
-	return true, res == 1
+	return true, res
 }
 
 // AddBloom 在首次写入真实互动数据时，把目标加入 Bloom。
 // BF.RESERVE 重复执行时会报“item exists”，这里显式吞掉这个错误。
 func AddBloom(ctx context.Context, svcCtx *svc.ServiceContext, bloomKey string, value string) {
-	if svcCtx.RawRedis == nil {
+	if svcCtx.Redis == nil {
 		return
 	}
 
-	_, err := svcCtx.RawRedis.Do(ctx, "BF.RESERVE", bloomKey, bloomErrorRate, bloomCapacity).Result()
+	_, err := svcCtx.Redis.Do(ctx, "BF.RESERVE", bloomKey, bloomErrorRate, bloomCapacity).Result()
 	if err != nil && !isBloomAlreadyExistsErr(err) {
 		logx.WithContext(ctx).Errorf("reserve bloom failed: %v", err)
 		return
 	}
 
-	if _, err := svcCtx.RawRedis.Do(ctx, "BF.ADD", bloomKey, value).Result(); err != nil {
+	if _, err := svcCtx.Redis.Do(ctx, "BF.ADD", bloomKey, value).Result(); err != nil {
 		logx.WithContext(ctx).Errorf("add bloom failed: %v", err)
 	}
 }
@@ -483,11 +484,11 @@ func AddBloom(ctx context.Context, svcCtx *svc.ServiceContext, bloomKey string, 
 // countSetWithoutDummy 用于对外返回真实计数。
 // Redis 中的 DummyUserId 只是防穿透占位节点，不能被算进点赞数/收藏数。
 func countSetWithoutDummy(ctx context.Context, svcCtx *svc.ServiceContext, key string) (int64, error) {
-	count, err := svcCtx.Redis.ScardCtx(ctx, key)
+	count, err := svcCtx.Redis.SCard(ctx, key).Result()
 	if err != nil {
 		return 0, err
 	}
-	hasDummy, err := svcCtx.Redis.SismemberCtx(ctx, key, DummyUserId)
+	hasDummy, err := svcCtx.Redis.SIsMember(ctx, key, DummyUserId).Result()
 	if err != nil {
 		return count, err
 	}
@@ -501,43 +502,43 @@ func countSetWithoutDummy(ctx context.Context, svcCtx *svc.ServiceContext, key s
 // 保证“空集合也有 key，有真实数据时又不会被 Dummy 干扰”。
 // 这几个辅助函数是让 Set/Hash 在反复增删后仍然保持缓存语义稳定的关键。
 func removeDummyUser(ctx context.Context, svcCtx *svc.ServiceContext, key string) {
-	_, _ = svcCtx.Redis.SremCtx(ctx, key, DummyUserId)
+	_, _ = svcCtx.Redis.SRem(ctx, key, DummyUserId).Result()
 	appmetrics.IncDummyOp(setKindFromKey(key), "remove")
-	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+	_ = svcCtx.Redis.Expire(ctx, key, time.Duration(cacheTTLSeconds)*time.Second).Err()
 }
 
 func ensureDummyUserIfEmpty(ctx context.Context, svcCtx *svc.ServiceContext, key string) {
-	count, err := svcCtx.Redis.ScardCtx(ctx, key)
+	count, err := svcCtx.Redis.SCard(ctx, key).Result()
 	if err != nil {
 		return
 	}
 	if count > 0 {
-		_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+		_ = svcCtx.Redis.Expire(ctx, key, time.Duration(cacheTTLSeconds)*time.Second).Err()
 		return
 	}
-	_, _ = svcCtx.Redis.SaddCtx(ctx, key, DummyUserId)
+	_, _ = svcCtx.Redis.SAdd(ctx, key, DummyUserId).Result()
 	appmetrics.IncDummyOp(setKindFromKey(key), "fill")
-	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+	_ = svcCtx.Redis.Expire(ctx, key, time.Duration(cacheTTLSeconds)*time.Second).Err()
 }
 
 func removeDummyRate(ctx context.Context, svcCtx *svc.ServiceContext, key string) {
-	_, _ = svcCtx.Redis.HdelCtx(ctx, key, DummyUserId)
+	_, _ = svcCtx.Redis.HDel(ctx, key, DummyUserId).Result()
 	appmetrics.IncDummyOp("post_rate", "remove")
-	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+	_ = svcCtx.Redis.Expire(ctx, key, time.Duration(cacheTTLSeconds)*time.Second).Err()
 }
 
 func ensureDummyRateIfEmpty(ctx context.Context, svcCtx *svc.ServiceContext, key string) {
-	size, err := svcCtx.Redis.HlenCtx(ctx, key)
+	size, err := svcCtx.Redis.HLen(ctx, key).Result()
 	if err != nil {
 		return
 	}
 	if size > 0 {
-		_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+		_ = svcCtx.Redis.Expire(ctx, key, time.Duration(cacheTTLSeconds)*time.Second).Err()
 		return
 	}
-	_, _ = svcCtx.Redis.HsetnxCtx(ctx, key, DummyUserId, "0")
+	_, _ = svcCtx.Redis.HSetNX(ctx, key, DummyUserId, "0").Result()
 	appmetrics.IncDummyOp("post_rate", "fill")
-	_ = svcCtx.Redis.ExpireCtx(ctx, key, cacheTTLSeconds)
+	_ = svcCtx.Redis.Expire(ctx, key, time.Duration(cacheTTLSeconds)*time.Second).Err()
 }
 
 func isBloomAlreadyExistsErr(err error) bool {

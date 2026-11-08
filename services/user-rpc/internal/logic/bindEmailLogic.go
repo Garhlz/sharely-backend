@@ -9,8 +9,8 @@ import (
 	"user-rpc/internal/svc"
 	"user-rpc/user"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -36,7 +36,7 @@ func (l *BindEmailLogic) BindEmail(in *user.BindEmailRequest) (*user.Empty, erro
 		return nil, status.Error(codes.InvalidArgument, "invalid params")
 	}
 
-	cached, err := l.svcCtx.Redis.GetCtx(l.ctx, emailCodeKey(emailSceneBindEmail, email))
+	cached, err := l.svcCtx.Redis.Get(l.ctx, emailCodeKey(emailSceneBindEmail, email)).Result()
 	if err != nil && err != redis.Nil {
 		return nil, status.Error(codes.Internal, "verify code error")
 	}
@@ -66,6 +66,6 @@ func (l *BindEmailLogic) BindEmail(in *user.BindEmailRequest) (*user.Empty, erro
 		return nil, status.Error(codes.Internal, "update user failed")
 	}
 
-	_, _ = l.svcCtx.Redis.Del(emailCodeKey(emailSceneBindEmail, email))
+	_, _ = l.svcCtx.Redis.Del(l.ctx, emailCodeKey(emailSceneBindEmail, email)).Result()
 	return &user.Empty{}, nil
 }

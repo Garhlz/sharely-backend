@@ -71,11 +71,7 @@ func (l *LoginLogic) Login(in *user.LoginRequest) (*user.AuthResponse, error) {
 		return nil, status.Error(codes.Internal, "create token failed")
 	}
 	// Redis 同时记录 Refresh 会话和 tokenVersion，使无状态 JWT 具备可撤销能力。
-	if err := l.svcCtx.Redis.Setex(
-		refreshTokenKey(u.Id, refreshJti),
-		"1",
-		int(l.svcCtx.Config.Jwt.RefreshExpireSeconds),
-	); err != nil {
+	if err := l.svcCtx.Redis.SetEx(l.ctx, refreshTokenKey(u.Id, refreshJti), "1", time.Duration(l.svcCtx.Config.Jwt.RefreshExpireSeconds)*time.Second).Err(); err != nil {
 		metricResult = "store_refresh_error"
 		return nil, status.Error(codes.Internal, "store refresh token failed")
 	}

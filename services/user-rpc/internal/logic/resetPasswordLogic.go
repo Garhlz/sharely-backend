@@ -9,8 +9,8 @@ import (
 	"user-rpc/internal/svc"
 	"user-rpc/user"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -40,7 +40,7 @@ func (l *ResetPasswordLogic) ResetPassword(in *user.ResetPasswordRequest) (*user
 		return nil, status.Error(codes.InvalidArgument, "password too short")
 	}
 
-	cached, err := l.svcCtx.Redis.GetCtx(l.ctx, emailCodeKey(emailSceneResetPassword, email))
+	cached, err := l.svcCtx.Redis.Get(l.ctx, emailCodeKey(emailSceneResetPassword, email)).Result()
 	if err != nil && err != redis.Nil {
 		return nil, status.Error(codes.Internal, "verify code error")
 	}
@@ -72,6 +72,6 @@ func (l *ResetPasswordLogic) ResetPassword(in *user.ResetPasswordRequest) (*user
 		return nil, status.Error(codes.Internal, "store token version failed")
 	}
 
-	_, _ = l.svcCtx.Redis.Del(emailCodeKey(emailSceneResetPassword, email))
+	_, _ = l.svcCtx.Redis.Del(l.ctx, emailCodeKey(emailSceneResetPassword, email)).Result()
 	return &user.Empty{}, nil
 }

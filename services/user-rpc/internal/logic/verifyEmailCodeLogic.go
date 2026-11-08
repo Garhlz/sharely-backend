@@ -7,8 +7,8 @@ import (
 	"user-rpc/internal/svc"
 	"user-rpc/user"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zeromicro/go-zero/core/logx"
-	"github.com/zeromicro/go-zero/core/stores/redis"
 )
 
 type VerifyEmailCodeLogic struct {
@@ -33,7 +33,7 @@ func (l *VerifyEmailCodeLogic) VerifyEmailCode(in *user.VerifyEmailCodeRequest) 
 		return &user.VerifyEmailCodeResponse{Valid: false}, nil
 	}
 
-	val, err := l.svcCtx.Redis.GetCtx(l.ctx, emailCodeKey(scene, email))
+	val, err := l.svcCtx.Redis.Get(l.ctx, emailCodeKey(scene, email)).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return &user.VerifyEmailCodeResponse{Valid: false}, nil

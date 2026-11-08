@@ -33,7 +33,7 @@ func mutate(ctx context.Context, s *svc.ServiceContext, c store.Command) error {
 	// 数据库提交后再失效缓存；失败由短 TTL 限制陈旧时间，不撤销已提交的业务。
 	prefix := map[string]string{"LIKE": KeyPostLikeSet, "COLLECT": KeyPostCollectSet, "RATE": KeyPostRateHash, "COMMENT_LIKE": KeyCommentLikeSet}[c.Kind]
 	if s.Redis != nil {
-		if _, err := s.Redis.DelCtx(ctx, prefix+c.TargetID); err != nil {
+		if _, err := s.Redis.Del(ctx, prefix+c.TargetID).Result(); err != nil {
 			logx.WithContext(ctx).Errorf("invalidate interaction cache: %v", err)
 		}
 	}
