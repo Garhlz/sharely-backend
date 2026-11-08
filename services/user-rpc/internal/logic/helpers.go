@@ -106,6 +106,7 @@ func checkPassword(hashed, password string) bool {
 }
 
 func buildTokenPair(cfg config.Config, u *model.Users) (*user.TokenPair, string, error) {
+	// 双 Token 使用同一签名密钥，但通过 type、有效期和 JTI 区分用途。
 	now := time.Now()
 	accessExp := now.Add(time.Duration(cfg.Jwt.AccessExpireSeconds) * time.Second)
 	refreshExp := now.Add(time.Duration(cfg.Jwt.RefreshExpireSeconds) * time.Second)
@@ -159,6 +160,7 @@ func buildTokenPair(cfg config.Config, u *model.Users) (*user.TokenPair, string,
 }
 
 func parseToken(cfg config.Config, token string) (*tokenClaims, error) {
+	// jwt/v5 会在解析时校验签名及 RegisteredClaims 中的过期时间。
 	claims := &tokenClaims{}
 	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		return []byte(cfg.Jwt.Secret), nil
@@ -181,6 +183,7 @@ func parseBirthday(value string) (sql.NullTime, error) {
 }
 
 func newTokenJti() (string, error) {
+	// JTI 是 Refresh Token 的随机会话标识，不能使用可预测的递增值。
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
@@ -218,11 +221,13 @@ func tokenVersionKey(userId int64) string {
 }
 
 func blockedTokenKey(token string) string {
+	// Redis Key 仅保存 Token 摘要，避免在服务端直接落完整凭据。
 	sum := sha256.Sum256([]byte(token))
 	return tokenBlockPrefix + hex.EncodeToString(sum[:])
 }
 
 func setTokenVersion(ctx context.Context, svcCtx *svc.ServiceContext, userId int64, version int64) error {
+	// 网关读取该值，并与 JWT Claims 中的版本进行比较。
 	return svcCtx.Redis.SetCtx(ctx, tokenVersionKey(userId), strconv.FormatInt(version, 10))
 }
 

@@ -1,4 +1,4 @@
-// Code scaffolded by goctl. Safe to edit.
+// 由 goctl 生成的代码骨架，可按业务需要修改。
 // goctl 1.9.2
 
 package auth
@@ -30,6 +30,7 @@ func NewLogoutLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LogoutLogi
 
 func (l *LogoutLogic) Logout() (resp *types.Empty, err error) {
 	client := userservice.NewUserService(l.svcCtx.UserRpc)
+	// 鉴权中间件已将身份和双 Token 写入 Context，此处统一取出并交给 user-rpc 撤销。
 	_, err = client.Logout(l.ctx, &userservice.LogoutRequest{
 		UserId:       ctxutil.UserID(l.ctx),
 		AccessToken:  ctxutil.AuthToken(l.ctx),

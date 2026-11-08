@@ -29,6 +29,7 @@ func NewLogoutLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LogoutLogi
 
 func (l *LogoutLogic) Logout(in *user.LogoutRequest) (*user.Empty, error) {
 	now := time.Now().Unix()
+	// 黑名单 TTL 取 Token 的剩余寿命，过期后无需继续保留撤销记录。
 	blockToken := func(token string) {
 		if token == "" {
 			return
@@ -48,6 +49,7 @@ func (l *LogoutLogic) Logout(in *user.LogoutRequest) (*user.Empty, error) {
 	blockToken(in.GetRefreshToken())
 
 	if in.GetRefreshToken() != "" {
+		// 删除当前 Refresh JTI，阻止该会话继续轮换 Token。
 		claims, err := parseToken(l.svcCtx.Config, in.GetRefreshToken())
 		if err == nil && claims.Type == "refresh" && claims.ID != "" {
 			_, _ = l.svcCtx.Redis.DelCtx(l.ctx, refreshTokenKey(claims.UserId, claims.ID))
@@ -55,6 +57,7 @@ func (l *LogoutLogic) Logout(in *user.LogoutRequest) (*user.Empty, error) {
 	}
 
 	if in.GetUserId() > 0 {
+		// 递增账号级版本，使该用户此前签发的所有 Token 一并失效。
 		u, err := l.svcCtx.Users.FindOne(l.ctx, in.GetUserId())
 		if err != nil && err != model.ErrNotFound {
 			return nil, status.Error(codes.Internal, "query user failed")

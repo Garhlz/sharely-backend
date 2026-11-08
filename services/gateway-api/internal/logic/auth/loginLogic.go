@@ -1,4 +1,4 @@
-// Code scaffolded by goctl. Safe to edit.
+// 由 goctl 生成的代码骨架，可按业务需要修改。
 // goctl 1.9.2
 
 package auth
@@ -28,6 +28,7 @@ func NewLoginLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LoginLogic 
 }
 
 func (l *LoginLogic) Login(req *types.AuthLoginReq) (resp *types.AuthResponse, err error) {
+	// 网关只负责协议转换；账号校验和 Token 签发统一由 user-rpc 完成。
 	client := userservice.NewUserService(l.svcCtx.UserRpc)
 	result, err := client.Login(l.ctx, &userservice.LoginRequest{
 		Email:    req.Email,
