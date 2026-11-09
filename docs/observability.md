@@ -129,7 +129,7 @@ docker run --rm --network none --entrypoint promtool -v "$PWD/deploy/prometheus:
 
 ## 当前限制
 
-- 旧的 `interaction_mq_publish_total` 不代表新 Outbox 发布状态；使用新的 Outbox 指标，并结合集合、日志和 RabbitMQ 判断。
-- Bloom 与 dummy 相关指标不一定有生产路径持续调用；空面板不能证明命中率为零或逻辑正确。
+- 无生产用途的 `interaction_mq_publish_total` 与 `interaction_bloom_checks_total` 已移除；使用 Outbox 指标判断发布状态。
+- Dummy 指标仍由空结果回填触发，当前不再有原地写缓存的 remove 路径；没有样本不代表没有空结果风险。
 - Sidecar ES 同步当前采用单消费者串行处理，避免旧事件覆盖新状态；吞吐瓶颈应先测量，再考虑按键有序并发。
 - 指标与 Trace 不能替代业务一致性校验。集群重启、MQ 故障及重复事件应使用隔离集成测试验证。

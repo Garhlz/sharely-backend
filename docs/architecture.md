@@ -46,7 +46,7 @@ Outbox → RabbitMQ
 
 ## Redis 客户端与缓存
 
-gateway-api、user-rpc、interaction-rpc 的业务调用统一使用 go-redis/v9，ServiceContext.Redis 为 UniversalClient。普通互动命令与 RedisBloom 共用客户端，不再维护 RawRedis。
+gateway-api、user-rpc、interaction-rpc 的业务调用统一使用 go-redis/v9，ServiceContext.Redis 为 UniversalClient，不再维护 RawRedis。互动缓存不依赖 RedisBloom。
 
 保留 YAML 的 Redis/BizRedis 和 Host、Type、User、Pass、Tls、NonBlock、PingTimeout 字段，仅复用 go-zero RedisConf 配置结构：
 
@@ -55,9 +55,20 @@ gateway-api、user-rpc、interaction-rpc 的业务调用统一使用 go-redis/v9
 - 三个独立 Go Module 各有少量连接装配代码，未增加公共模块或业务命令包装层。服务退出时关闭连接池。
 - 原 go-zero Redis 封装的熔断与专用 Hook 不再自动应用；HTTP/gRPC/MQ 观测和业务指标保留。
 
-命令使用请求 Context 与 Result()/Err()。Exists 返回数量；Get/HGet 缺失返回 redis.Nil：验证码校验失败、受保护接口拒绝无版本 Token、公开接口降级匿名。SetEx/SetNX/Expire 使用 time.Duration，Token 版本通过 Set(..., 0) 保持无 TTL。BF.EXISTS 使用 Bool() 兼容 RESP2 整数与 RESP3 布尔回复。
+命令使用请求 Context 与 Result()/Err()。Exists 返回数量；Get/HGet 缺失返回 redis.Nil：验证码校验失败、受保护接口拒绝无版本 Token、公开接口降级匿名。SetEx/SetNX/Expire 使用 time.Duration，Token 版本通过 Set(..., 0) 保持无 TTL。
 
-缓存为 Set/Hash，Mongo 查询为空时保留 Dummy 占位；按 Key 加短锁减少并发回源。Lua 原子写入完整集合与 60 秒 TTL。写入与回填交错仍可能短期陈旧，不保证 Redis 与 Mongo 强一致。Bloom 不再作为跳过事实查询的依据，Key 与验证码/Token 有效期保持原约定。
+缓存为 Set/Hash，Mongo 查询为空时保留 Dummy 占位；按 Key 加短锁减少并发回源。Lua 原子写入完整集合与 60 秒 TTL。写入与回填交错仍可能短期陈旧，不保证 Redis 与 Mongo 强一致。读取直接进入 Ensure 缓存检查，不再保留 Bloom 或恒真 ShouldLoad 门面；Key 与验证码/Token 有效期保持原约定。
+
+## 迁移残留清理边界
+
+- 已删除 Go 旧互动事件、仅供旧 MQ 使用的请求头适配器、原地增删缓存的辅助函数、Bloom 函数与旧发布指标。保留实际使用的空值占位、Lua 回填、短锁与 Outbox。
+- Java 的空操作 InteractionService 已移除，开发造数仅生成用户、关注、帖子与评论，结果明确提示点赞应通过 Go 网关生成。
+- 无调用者的 Java 搜索历史空方法、Repository、实体及旧事件已移除。搜索历史由 search-rpc 管理。
+- 旧 Java 互动/搜索测试完整保留作场景对照，RedisKey、PostRateDTO、PostEsDoc、PostEsRepository 与 ES 配置资源下沉测试目录，Elasticsearch starter 改为 test 范围；生产 Java 不再初始化 ES 客户端/Repository。搜索/互动的闲置 Java gRPC 客户端配置同步移除，管理后台使用的 user-service 保留。
+- Java 全量清空 ES 的 DataSyncTest 保留但禁用，正式重建只走 Sidecar 管理接口。测试对应关系与真实 ES 验证缺口见 [测试文档](testing.md)。
+- FOLLOW Listener、Java 删除帖子的互动级联清理、网关 Java 代理及与 API 定义配套的生成骨架仍有职责，不按“未迁移到 Go”一概删除。Sidecar 现存全局 MQ 连接还承担启动探测；本次不改变启动失败/重连行为。
+
+本次未修改数据库内容、索引定义、MQ 路由或 Proto，也未替换 Redis 镜像或数据卷；现有 Redis Stack 可继续运行，但不再是 Bloom 功能依赖。
 
 ## 切换与启动条件
 
