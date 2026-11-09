@@ -7,8 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
+	"notification-rpc/internal/metrics"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -17,6 +16,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const Queue = "interaction.notification.v1"
@@ -64,7 +68,7 @@ func Run(ctx context.Context, db *mongo.Database, url, dsn string) {
 	}
 	users := sqlx.NewMysql(dsn)
 	for ctx.Err() == nil {
-		if err := consume(ctx, db, users, url); err != nil {
+		if err := consume(ctx, db, users, url); err != nil && ctx.Err() == nil {
 			logx.Errorf("interaction notification consumer: %v", err)
 		}
 		select {
@@ -80,6 +84,7 @@ func consume(ctx context.Context, db *mongo.Database, users UserReader, url stri
 }
 
 func consumeQueue(ctx context.Context, db *mongo.Database, users UserReader, url, queue, dlx, dead string) error {
+	metrics.ConsumerUp.Set(0)
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return err
@@ -109,6 +114,8 @@ func consumeQueue(ctx context.Context, db *mongo.Database, users UserReader, url
 	if err != nil {
 		return err
 	}
+	metrics.ConsumerUp.Set(1)
+	defer metrics.ConsumerUp.Set(0)
 	for {
 		select {
 		case <-ctx.Done():
@@ -120,28 +127,30 @@ func consumeQueue(ctx context.Context, db *mongo.Database, users UserReader, url
 			var e Event
 			if err := json.Unmarshal(d.Body, &e); err != nil {
 				logx.Errorf("invalid notification JSON: %v", err)
-				_ = d.Nack(false, false)
+				if err := d.Nack(false, false); err != nil {
+					metrics.ObserveConsume("ack_error")
+					return err
+				}
+				metrics.ObserveConsume("dead_letter")
 				continue
 			}
 			if _, err := NotificationType(e); err != nil {
 				logx.Errorf("invalid notification event: %v", err)
-				_ = d.Nack(false, false)
+				if err := d.Nack(false, false); err != nil {
+					metrics.ObserveConsume("ack_error")
+					return err
+				}
+				metrics.ObserveConsume("dead_letter")
 				continue
 			}
 			for {
-				carrier := propagation.MapCarrier{}
-				for key, value := range d.Headers {
-					if str, ok := value.(string); ok {
-						carrier[key] = str
-					}
-				}
-				attempt, cancel := context.WithTimeout(otel.GetTextMapPropagator().Extract(ctx, carrier), 15*time.Second)
-				err = Handle(attempt, db, users, e)
-				cancel()
+				err = processAttempt(ctx, d, func(attempt context.Context) error { return Handle(attempt, db, users, e) })
 				if err == nil {
 					if err = d.Ack(false); err != nil {
+						metrics.ObserveConsume("ack_error")
 						return err
 					}
+					metrics.ObserveConsume("acked")
 					break
 				}
 				logx.Errorf("retry notification event=%s: %v", e.EventID, err)
@@ -257,4 +266,36 @@ func Handle(ctx context.Context, db *mongo.Database, users UserReader, e Event) 
 		return fmt.Errorf("notification transaction: %w", err)
 	}
 	return nil
+}
+
+// 一条消息可有多次处理尝试；success 表示处理成功，acked 才表示确认调用成功。
+func processAttempt(ctx context.Context, d amqp.Delivery, handle func(context.Context) error) (err error) {
+	carrier := propagation.MapCarrier{}
+	for key, value := range d.Headers {
+		if str, ok := value.(string); ok {
+			carrier[key] = str
+		}
+	}
+	parent := otel.GetTextMapPropagator().Extract(ctx, carrier)
+	attempt, cancel := context.WithTimeout(parent, 15*time.Second)
+	defer cancel()
+	attempt, span := otel.Tracer("notification-rpc/consumer").Start(attempt, "notification.process", trace.WithSpanKind(trace.SpanKindConsumer))
+	attempt = logx.ContextWithFields(attempt, logx.Field("requestId", carrier["X-Request-Id"]))
+	if sc := span.SpanContext(); sc.IsValid() {
+		attempt = logx.ContextWithFields(attempt, logx.Field("traceId", sc.TraceID().String()))
+	}
+	span.SetAttributes(attribute.String("messaging.message.id", d.MessageId), attribute.String("messaging.destination.name", Queue))
+	start := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "retry"
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, "notification handling failed")
+			logx.WithContext(attempt).Errorf("notification processing failed messageId=%s err=%v", d.MessageId, err)
+		}
+		metrics.ObserveConsumeAttempt(result, time.Since(start))
+		span.End()
+	}()
+	return handle(attempt)
 }

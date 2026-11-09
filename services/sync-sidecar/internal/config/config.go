@@ -18,6 +18,7 @@ type AppConfig struct {
 	AdminHost    string
 	AdminPort    string
 	AdminToken   string
+	MetricsAddr  string
 
 	// 队列名称配置 (与 Java RabbitConfig 保持一致)
 	QueueLog    string
@@ -48,6 +49,7 @@ func LoadConfig() *AppConfig {
 		AdminHost:    getEnv("ADMIN_HOST", "0.0.0.0"),
 		AdminPort:    getEnv("ADMIN_PORT", "8088"),
 		AdminToken:   getEnv("ADMIN_TOKEN", "szu123"),
+		MetricsAddr:  getEnv("METRICS_ADDR", ":40097"),
 
 		// 队列名硬编码以匹配 Java 配置
 		QueueLog:    "platform.log.queue",

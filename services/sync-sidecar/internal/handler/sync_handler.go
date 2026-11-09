@@ -25,6 +25,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	mongoOptions "go.mongodb.org/mongo-driver/mongo/options"
 	"go.opentelemetry.io/otel"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -46,6 +47,7 @@ func (h *SyncHandler) Handle(d amqp.Delivery) {
 
 	typeId, ok := d.Headers["__TypeId__"].(string)
 	if !ok {
+		span.SetStatus(otelcodes.Error, "missing event type")
 		d.Nack(false, false)
 		return
 	}
@@ -112,6 +114,8 @@ func (h *SyncHandler) Handle(d amqp.Delivery) {
 	}
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, "ES sync failed")
 		obslog.DeliveryErrorf(d, "es sync handle error event=%s err=%v", className, err)
 		// 合法消息的临时下游故障保留重试；非法 JSON 进入死信，避免毒消息阻塞。
 		if json.Valid(d.Body) {

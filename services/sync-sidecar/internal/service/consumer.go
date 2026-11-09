@@ -6,8 +6,10 @@ import (
 	"sync"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
+	"sync-sidecar/internal/metrics"
 	"sync-sidecar/internal/obslog"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // ConsumerHandler 是具体的业务处理函数签名
@@ -15,6 +17,7 @@ type ConsumerHandler func(d amqp.Delivery)
 
 // StartConsumerGroup 启动一组 Worker 来监听指定队列，并自动完成交换机声明与绑定
 func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler ConsumerHandler) {
+	metrics.InitQueue(queueName)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -32,6 +35,7 @@ func (i *Infra) StartConsumerGroup(wg *sync.WaitGroup, queueName string, handler
 }
 
 func (i *Infra) consumeGroup(ctx context.Context, queueName string, handler ConsumerHandler) error {
+	metrics.ConsumerUp.WithLabelValues(queueName).Set(0)
 	var wg sync.WaitGroup
 	conn, err := amqp.Dial(i.Cfg.RabbitMQURL)
 	if err != nil {
@@ -144,6 +148,8 @@ func (i *Infra) consumeGroup(ctx context.Context, queueName string, handler Cons
 		return err
 	}
 
+	metrics.ConsumerUp.WithLabelValues(queueName).Set(1)
+	defer metrics.ConsumerUp.WithLabelValues(queueName).Set(0)
 	obslog.Infof("consumer group started queue=%s workers=%d", queueName, i.Cfg.WorkerCount)
 
 	// 7. 启动 Worker Pool
@@ -156,6 +162,7 @@ func (i *Infra) consumeGroup(ctx context.Context, queueName string, handler Cons
 		go func(workerId int) {
 			defer wg.Done()
 			for d := range msgs {
+				d = metrics.TrackDelivery(d, queueName)
 				// 兜底 Panic，防止单个消息搞挂整个进程
 				func() {
 					defer func() {

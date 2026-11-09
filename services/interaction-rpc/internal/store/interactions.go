@@ -7,15 +7,15 @@ import (
 	"math"
 	"time"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"google.golang.org/grpc/metadata"
 )
 
 const NotificationQueue = "interaction.notification.v1"
@@ -218,6 +218,11 @@ func (s *MongoStore) Apply(ctx context.Context, c Command) (bool, error) {
 		}
 		headers := propagation.MapCarrier{}
 		otel.GetTextMapPropagator().Inject(ctx, headers)
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if ids := md.Get("x-request-id"); len(ids) > 0 {
+				headers["X-Request-Id"] = ids[0]
+			}
+		}
 		docs := []any{Outbox{ID: primitive.NewObjectID(), Queue: NotificationQueue, Payload: notification, CreatedAt: now, Headers: headers}}
 		if postID != "" {
 			docs = append(docs, Outbox{ID: primitive.NewObjectID(), Queue: SearchQueue, TypeID: "PostUpdateEvent", Payload: bson.M{"postId": postID}, CreatedAt: now, Headers: headers})

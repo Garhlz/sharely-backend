@@ -46,6 +46,7 @@ func main() {
 	consumerCtx, stopConsumer := context.WithCancel(context.Background())
 	defer stopConsumer()
 	if c.RabbitMQ.DataSource != "" {
+		appmetrics.ConsumerEnabled.Set(1)
 		go consumer.Run(consumerCtx, ctx.Mongo, c.RabbitMQ.DataSource, c.Mysql.DataSource)
 	}
 

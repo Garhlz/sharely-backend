@@ -14,6 +14,8 @@ import (
 	"sync-sidecar/internal/obslog"
 	"sync-sidecar/internal/service"
 	"sync-sidecar/internal/telemetry"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -56,6 +58,14 @@ func main() {
 	}()
 
 	// 4. 启动多队列消费者
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metricsMux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			panic(err)
+		}
+	}()
 	var wg sync.WaitGroup
 
 	// Group 1: 日志
@@ -81,6 +91,7 @@ func main() {
 	if err := adminServer.Shutdown(shutdownCtx); err != nil {
 		obslog.Errorf("admin server shutdown error err=%v", err)
 	}
+	_ = metricsServer.Shutdown(shutdownCtx)
 	// 注意：rabbitmq connection 关闭会导致 channel 关闭，从而让 worker loop 退出
 	infra.Close()
 	wg.Wait()
