@@ -74,6 +74,7 @@ fail() 必须返回非零；只看最终“通过”文字不足以判断结果�
 
 ## 验证记录与范围
 
+- **2026-11-09 可观测性改进**：网关、互动、通知、Sidecar 默认测试与 vet 通过；新增积压快照、Span 父子关系、消费确认透传及结构化日志回归。隔离 Mongo/MQ 的互动与通知集成各三轮通过，验证 Broker 不可达时积压采集仍工作、恢复发布后排空、请求标识与 Trace 透传。Prometheus/Promtail 配置校验、告警规则单元测试与 Dashboard JSON 检查通过；未启动完整 Grafana/Loki/Jaeger 集群或验证外部告警通知。
 - **2026-11-09 文档整理前回归**：gateway-api、user-rpc、interaction-rpc 的 `go test ./...` 与 `go vet ./...` 通过；未配置真实中间件的集成用例按约定 Skip，本轮未重新执行完整 Smoke。
 - **2026-11-08 互动迁移**：互动、通知、网关、Sidecar 的 Go 全量测试/vet，Java 10 个默认测试及两份 Compose 检查通过。真实 Mongo/MQ 集成各三轮通过；修正 Smoke 失败退出码后五条完整 Smoke 两轮通过。
 - **2026-11-08 故障演练**：实际停止隔离 MQ 后，HTTP 点赞成功、Mongo 明细存在、Outbox 积压两条；恢复后通知与 ES 自动补齐。发现并修复 Sidecar 未重订阅；旧评论服务仍需重新建立连接，不能将结论扩大到整个旧集群。
