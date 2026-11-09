@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @Slf4j
 @org.junit.jupiter.api.Tag("integration")
 @SpringBootTest
-@Disabled("migrated to gateway/user-rpc")
+@Disabled("旧 Java 搜索场景保留对照；对应关系与真实 ES 验证缺口见 docs/testing.md，禁止直接启用旧共享库夹具")
 public class SearchModuleTest {
 
     @Autowired

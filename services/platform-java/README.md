@@ -101,7 +101,7 @@ Java 当前仍保留多个关键 listener：
 cp services/platform-java/.env.example services/platform-java/.env
 ```
 
-在仓库根目录执行复制命令。默认配置连接 Docker 暴露到宿主机的 MySQL、MongoDB、Redis、RabbitMQ 和 Elasticsearch。第三方能力使用禁用占位值；只有验证邮件、OSS、微信或 AI 时才填写专用测试凭证。
+在仓库根目录执行复制命令。默认配置连接 Docker 暴露到宿主机的 MySQL、MongoDB、Redis 和 RabbitMQ。检索与 ES 写入由 Go 承接，生产 Java 不再直接初始化 Elasticsearch；旧 ES 依赖与实体仅保留在测试范围。第三方能力使用禁用占位值；只有验证邮件、OSS、微信或 AI 时才填写专用测试凭证。
 
 ```bash
 cd services/platform-java
@@ -124,7 +124,7 @@ Java 测试使用 JUnit 5 Tag 隔离外部依赖和真实副作用：
 # 默认：只运行不依赖中间件、不会访问外部服务的快速测试
 mvn test
 
-# 集成：需要先启动 MySQL、MongoDB、Redis、RabbitMQ、Elasticsearch
+# 集成：使用隔离的 MySQL、MongoDB、Redis、RabbitMQ；旧 Java 搜索与 ES 重建用例仍禁用
 mvn test -Pintegration
 
 # 真实外部服务：可能发送邮件或上传 OSS，必须显式设置安全开关
@@ -133,8 +133,8 @@ EXTERNAL_TEST_EMAIL=your-test-mailbox@example.com \
 mvn test -Pexternal
 ```
 
-默认测试覆盖统一响应、业务错误码、用户 ThreadLocal 上下文和 JWT
-等纯逻辑；带 `integration` / `external` Tag 的历史测试不会进入默认执行。
+默认测试覆盖统一响应、业务错误码、用户 ThreadLocal、JWT 和 FOLLOW 通知适配。
+带 `integration` / `external` Tag 的历史测试不会进入默认执行。旧互动/搜索测试完整保留，但不能直接启用其中的旧路由及共享库清理夹具；[迁移场景对应表](../../docs/testing.md) 区分已有覆盖与真实 ES 验证缺口。
 
 标签约定：
 

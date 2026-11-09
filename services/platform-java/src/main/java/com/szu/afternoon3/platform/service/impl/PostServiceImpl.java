@@ -3,9 +3,6 @@ package com.szu.afternoon3.platform.service.impl;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
-import co.elastic.clients.elasticsearch._types.query_dsl.*;
-import co.elastic.clients.elasticsearch.core.search.Suggester;
-import co.elastic.clients.json.JsonData;
 import com.szu.afternoon3.platform.common.UserContext;
 import com.szu.afternoon3.platform.common.MqPublisher;
 import com.szu.afternoon3.platform.component.SensitiveWordFilter;
@@ -18,7 +15,6 @@ import com.szu.afternoon3.platform.entity.mongo.UserFollowDoc;
 import com.szu.afternoon3.platform.event.PostCreateEvent;
 import com.szu.afternoon3.platform.event.PostDeleteEvent;
 import com.szu.afternoon3.platform.event.PostUpdateEvent;
-import com.szu.afternoon3.platform.event.UserSearchEvent;
 import com.szu.afternoon3.platform.exception.AppException;
 import com.szu.afternoon3.platform.enums.ResultCode;
 import com.szu.afternoon3.platform.repository.*;
@@ -30,17 +26,10 @@ import com.szu.afternoon3.platform.vo.UserInfo;
 import com.szu.afternoon3.platform.dto.PostCreateDTO;
 import com.szu.afternoon3.platform.entity.User;
 import com.szu.afternoon3.platform.mapper.UserMapper;
-import com.szu.afternoon3.platform.entity.mongo.SearchHistoryDoc;
-import com.szu.afternoon3.platform.repository.SearchHistoryRepository;
 import lombok.extern.slf4j.Slf4j;
-import lombok.extern.slf4j.XSlf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.*;
-import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
-import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
-import org.springframework.data.elasticsearch.core.query.highlight.HighlightParameters;
-import org.springframework.data.elasticsearch.core.suggest.response.Suggest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
@@ -50,8 +39,6 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import com.szu.afternoon3.platform.entity.es.PostEsDoc;
-// 注意引入正确的 Spring Data ES 依赖
 import org.springframework.data.domain.PageImpl;
 
 import java.time.LocalDateTime;
@@ -62,7 +49,6 @@ import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 import com.szu.afternoon3.platform.vo.PageResult;
 
-// 引入 gRPC 生成的代码
 
 @Slf4j
 @Service
@@ -85,8 +71,6 @@ public class PostServiceImpl implements PostService {
     @Autowired
     private UserService userService;
     @Autowired
-    private SearchHistoryRepository searchHistoryRepository;
-    @Autowired
     private StringRedisTemplate redisTemplate;
     @Autowired
     private MqPublisher mqPublisher;
@@ -97,8 +81,6 @@ public class PostServiceImpl implements PostService {
     // 提取为成员变量，避免重复创建 (DateTimeFormatter 是线程安全的)
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    // 用于 Function Score 的时间格式化 (ES 要求)
-    private static final DateTimeFormatter ES_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
 
     /**
      * 获取帖子列表 (入口)
@@ -110,7 +92,7 @@ public class PostServiceImpl implements PostService {
             return queryFollowStreamFromMongo(page, size);
         }
 
-        // 2. 其他场景 (推荐/标签) - 走 ES
+        // 2. Java 保留的推荐/标签查询走 Mongo；网关搜索入口由 Go 承接
         return queryRecommendFromMongo(tag, page, size, sort);
     }
 
@@ -177,28 +159,6 @@ public class PostServiceImpl implements PostService {
     @Override
     public List<String> getSearchSuggestions(String keyword) {
         return new ArrayList<>();
-    }
-
-    /**
-     * 获取搜索历史 (简化)
-     */
-    @Override
-    public List<String> getSearchHistory(Long userId) {
-        return new ArrayList<>();
-    }
-
-    /**
-     * 清空搜索历史 (简化)
-     */
-    @Override
-    public void clearSearchHistory(Long userId) {
-    }
-
-    /**
-     * 删除单条历史 (简化)
-     */
-    @Override
-    public void deleteSearchHistoryItem(Long userId, String keyword) {
     }
 
     private PageResult<PostVO> queryRecommendFromMongo(String tag, Integer page, Integer size, String sort) {

@@ -10,6 +10,7 @@ import lombok.ToString;
 @NoArgsConstructor
 @ToString
 public class InteractionEvent {
+    // 当前仅用于 Java FOLLOW 通知；保留旧字段形状以兼容历史消息反序列化。
     /**
      * 触发交互的用户ID
      */

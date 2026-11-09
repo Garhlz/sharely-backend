@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 @Data
+/** 仅供迁移前禁用用例编译，不属于当前 Java 业务契约。 */
 public class PostRateDTO {
     @NotBlank(message = "帖子ID不能为空")
     private String postId;

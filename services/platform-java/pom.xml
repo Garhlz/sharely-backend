@@ -156,6 +156,8 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+            <!-- 仅供保留的历史搜索测试编译；生产检索与索引同步由 Go 承接。 -->
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.poi</groupId>

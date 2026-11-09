@@ -34,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional // 保持事务回滚，防止垃圾数据堆积
-@Disabled("migrated to gateway/user-rpc")
+@Disabled("互动已迁移到 Go；场景对应关系见 docs/testing.md，禁止直接启用旧路由与共享库清理夹具")
 public class InteractionIntegrationTest {
 
     @Autowired

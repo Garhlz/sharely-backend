@@ -7,6 +7,7 @@ import com.szu.afternoon3.platform.repository.PostRepository;
 import com.szu.afternoon3.platform.repository.es.PostEsRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Disabled;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,7 @@ import java.util.List;
 @Slf4j
 @org.junit.jupiter.api.Tag("integration")
 @SpringBootTest // 启动 Spring 上下文，获取 Repository
+@Disabled("旧手工 ES 重建工具保留参考；当前重建由 Sidecar 管理接口执行，禁止 integration 测试清空共享索引")
 public class DataSyncTest {
 
     @Autowired

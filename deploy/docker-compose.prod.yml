@@ -128,8 +128,6 @@ services:
         condition: service_started
       mq:
         condition: service_healthy
-      es:
-        condition: service_healthy
       etcd:
         condition: service_started
     networks:

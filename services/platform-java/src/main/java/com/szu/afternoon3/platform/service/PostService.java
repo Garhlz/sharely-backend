@@ -62,12 +62,4 @@ public interface PostService {
      */
     void updatePost(String postId, PostUpdateDTO dto);
 
-    // 获取搜索历史
-    List<String> getSearchHistory(Long userId);
-
-    // 清空搜索历史
-    void clearSearchHistory(Long userId);
-
-    // 删除单条搜索历史
-    void deleteSearchHistoryItem(Long userId, String keyword);
 }

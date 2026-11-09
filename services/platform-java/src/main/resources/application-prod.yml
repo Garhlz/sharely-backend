@@ -19,10 +19,6 @@ spring:
       database: 0
       password: ${REDIS_PASSWORD:}
 
-  elasticsearch:
-    uris: ${ELASTICSEARCH_URIS:http://es:9200}
-    socket-timeout: 30s
-    connection-timeout: 5s
 
   rabbitmq:
     host: ${RABBITMQ_HOST:mq}
@@ -110,12 +106,6 @@ logging:
 
 grpc:
   client:
-    interaction-service:
-      address: ${GRPC_INTERACTION_ADDR:static://interaction-rpc:8080}
-      negotiation-type: plaintext
-    search-service:
-      address: ${GRPC_SEARCH_ADDR:static://search-rpc:8080}
-      negotiation-type: plaintext
     user-service:
       address: ${GRPC_USER_ADDR:static://user-rpc:8080}
       negotiation-type: plaintext

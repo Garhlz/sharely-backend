@@ -12,7 +12,6 @@ import com.szu.afternoon3.platform.entity.User;
 import com.szu.afternoon3.platform.entity.mongo.PostDoc; // 假设你的MongoDB实体类位置
 import com.szu.afternoon3.platform.mapper.UserMapper;
 import com.szu.afternoon3.platform.grpc.CommentRpcClient;
-import com.szu.afternoon3.platform.service.InteractionService;
 import com.szu.afternoon3.platform.service.PostService;
 import com.szu.afternoon3.platform.service.UserService;
 import com.szu.afternoon3.platform.grpc.NotificationRpcClient;
@@ -44,7 +43,6 @@ public class DevDataController {
 
     @Autowired private UserService userService;
     @Autowired private PostService postService;
-    @Autowired private InteractionService interactionService;
     @Autowired private CommentRpcClient commentRpcClient;
     @Autowired private UserMapper userMapper;
     @Autowired private MongoTemplate mongoTemplate; // 引入 MongoTemplate 用于反查帖子ID
@@ -79,7 +77,7 @@ public class DevDataController {
     @PostMapping("/seed")
     @Transactional(rollbackFor = Exception.class)
     public Result<String> seedData() {
-        log.info(">>> 开始生成全套测试数据 (用户 -> 关注 -> 发帖 -> 点赞 -> 评论)...");
+        log.info(">>> 开始生成全套测试数据 (用户 -> 关注 -> 发帖 -> 评论)...");
         List<User> createdUsers = new ArrayList<>();
 
         // --- Step 1: 创建/获取用户 ---
@@ -179,8 +177,8 @@ public class DevDataController {
             return Result.success("用户生成成功，但帖子生成似乎有问题，未找到帖子。");
         }
 
-        // --- Step 5: 互相点赞与评论 ---
-        log.info(">>> 正在进行互动 (点赞/评论)...");
+        // --- Step 5: 生成评论；点赞通过网关/Go 冒烟生成，不再调用旧 Java 空实现 ---
+        log.info(">>> 正在生成评论（点赞需通过 Go 网关生成）...");
         for (PostDoc post : recentPosts) {
             // 对于每个帖子，随机抽取 2-4 个用户进行互动
             List<User> interactUsers = RandomUtil.randomEleList(createdUsers, RandomUtil.randomInt(2, 5));
@@ -188,14 +186,7 @@ public class DevDataController {
             for (User u : interactUsers) {
                 simulateLogin(u);
                 try {
-                    // 1. 点赞 (70% 概率)
-                    if (RandomUtil.randomInt(100) < 70) {
-                        try {
-                            interactionService.likePost(post.getId());
-                        } catch (Exception ignored) {} // 忽略重复点赞
-                    }
-
-                    // 2. 评论 (40% 概率)
+                    // 评论 (40% 概率)
                     if (RandomUtil.randomInt(100) < 40) {
                         CommentCreateDTO commentDto = new CommentCreateDTO();
                         commentDto.setPostId(post.getId());
@@ -208,7 +199,7 @@ public class DevDataController {
             }
         }
 
-        return Result.success(String.format("生成完毕！用户数:%d, 帖子数(本次扫描):%d. 互动已自动完成。", createdUsers.size(), recentPosts.size()));
+        return Result.success(String.format("生成完毕！用户数:%d, 帖子数(本次扫描):%d. 已尝试生成关注与评论；点赞请通过网关生成。", createdUsers.size(), recentPosts.size()));
     }
 
     // 辅助方法：模拟登录上下文

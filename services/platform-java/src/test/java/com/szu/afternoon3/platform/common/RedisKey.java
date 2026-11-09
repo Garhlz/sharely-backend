@@ -1,5 +1,6 @@
 package com.szu.afternoon3.platform.common;
 
+/** 仅供迁移前禁用用例编译，不属于当前 Java 业务契约。 */
 public interface RedisKey {
     // Set结构: 存储点赞用户ID (用于快速去重/判断是否点赞)
     // Key: inter:post:like:{postId}, Member: userId
