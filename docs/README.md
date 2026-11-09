@@ -1,10 +1,11 @@
 # Sharely 文档导航
 
-根目录 [README](../README.md) 负责项目概览与启动；详细说明按主题维护，不再另设迁移计划、实施记录或 Grafana 教程副本。
+根目录 [README](../README.md) 负责项目概览与启动；已实施内容按主题维护，未实施方案单独标明状态，不作为当前架构事实。
 
 | 文档 | 内容 |
 |---|---|
 | [架构与迁移](architecture.md) | 服务职责、数据事实源、互动事务与 Outbox、Redis 客户端、迁移与回滚 |
+| [MySQL 全量迁移计划](mysql_migration_plan.md) | 待决策草案：ORM 取舍、表结构、事务、分阶段实施及数据重建；尚未启动 |
 | [测试与覆盖率](testing.md) | 测试分层、执行命令、集成测试隔离、验证记录及历史覆盖率 |
 | [可观测性](observability.md) | 日志、Trace、Prometheus 指标与 Grafana 查询 |
 | [用户事件契约](user_events.md) | 实际事件载荷、路由、消费者及可靠性边界 |
