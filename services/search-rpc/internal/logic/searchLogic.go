@@ -31,7 +31,7 @@ func NewSearchLogic(ctx context.Context, svcCtx *svc.ServiceContext) *SearchLogi
 	}
 }
 
-// 对应 Java: PostEsDoc 结构 (用于解析 ES 返回结果)
+// 解析 Sidecar 写入的 ES 帖子文档。
 type PostEsDoc struct {
 	Id           string   `json:"id"`
 	Title        string   `json:"title"`
@@ -45,14 +45,12 @@ type PostEsDoc struct {
 	Tags         []string `json:"tags"`
 	CoverWidth   int32    `json:"coverWidth"`
 	CoverHeight  int32    `json:"coverHeight"`
-	CreatedAt    string   `json:"createdAt"` // ES 默认存的是 UTC 时间
+	CreatedAt    string   `json:"createdAt"`
 }
 
 func (l *SearchLogic) Search(in *search.SearchRequest) (*search.SearchResponse, error) {
 	start := time.Now()
-	// 1. 异步记录搜索历史 (对应 Java: rabbitTemplate.convertAndSend("search.history"))
-	// 既然我们在搜索微服务内部，直接写 Mongo 效率更高，或者你也发 MQ。这里演示直接写库。
-	// 开了个协程记录搜索历史，非常合理
+	// 登录用户的搜索历史由本服务异步写 Mongo，不再经过旧 Java 搜索事件。
 	if in.UserId > 0 && in.Keyword != "" {
 		go l.recordSearchHistory(in.UserId, in.Keyword)
 	}
@@ -238,9 +236,7 @@ func (l *SearchLogic) Search(in *search.SearchRequest) (*search.SearchResponse, 
 				Nickname: doc.UserNickname,
 				Avatar:   doc.UserAvatar,
 			},
-			// TODO bug here
-			// IsLiked 可以在这里设为 false，让 Java 网关层去补全
-			// 或者如果 Search 微服务能访问 Redis，也可以在这里查
+			// 个性化互动状态由 Go 网关调用 interaction-rpc 批量补齐。
 			IsLiked:   false,
 			CreatedAt: doc.CreatedAt,
 		}
