@@ -1,6 +1,7 @@
 package response
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -44,6 +45,11 @@ func TestErrorHandler_GrpcMappings(t *testing.T) {
 		{"rate limited", status.Error(codes.ResourceExhausted, "slow down"), 429, 42901},
 		{"mail failure", status.Error(codes.Internal, "mail send failed"), 500, 50002},
 		{"unavailable", status.Error(codes.Unavailable, "rpc unavailable"), 502, 50005},
+		{"deadline", status.Error(codes.DeadlineExceeded, "timeout"), 504, 50004},
+		{"canceled", status.Error(codes.Canceled, "canceled"), 408, 40001},
+		{"unknown grpc", status.Error(codes.Unknown, "failure"), 500, 50001},
+		{"context deadline", context.DeadlineExceeded, 504, 50004},
+		{"context canceled", context.Canceled, 408, 40001},
 	}
 
 	for _, tt := range tests {
