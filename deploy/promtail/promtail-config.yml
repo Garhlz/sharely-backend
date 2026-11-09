@@ -16,7 +16,7 @@ scrape_configs:
     pipeline_stages:
       - docker: {}
       - match:
-          selector: '{compose_service=~"gateway-api|user-rpc|interaction-rpc|search-rpc|comment-rpc|notification-rpc"}'
+          selector: '{compose_service=~"gateway-api|user-rpc|interaction-rpc|search-rpc|comment-rpc|notification-rpc|sync-sidecar"}'
           stages:
             - json:
                 expressions:
@@ -28,10 +28,6 @@ scrape_configs:
                   routingKey: routingKey
             - labels:
                 level:
-                trace:
-                traceId:
-                requestId:
-                span:
                 routingKey:
     relabel_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
@@ -57,14 +53,16 @@ scrape_configs:
           __path__: /var/log/platform-java/*.log
 
     pipeline_stages:
+      - multiline:
+          firstline: '^\d{4}-\d{2}-\d{2} '
+          max_wait_time: 3s
+          max_lines: 256
       - regex:
-          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[(?P<thread>[^\]]+)\] service=(?P<service>[^\s]*) traceId=(?P<traceId>[^\s]*) requestId=(?P<requestId>[^\s]*) routingKey=(?P<routingKey>[^\s]*) (?P<level>[A-Z]+)\s+(?P<logger>[^-]+) - (?P<message>.*)$'
+          expression: '(?s)^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[(?P<thread>[^\]]+)\] service=(?P<service>[^\s]*) traceId=(?P<traceId>[^\s]*) requestId=(?P<requestId>[^\s]*) routingKey=(?P<routingKey>[^\s]*) (?P<level>[A-Z]+)\s+(?P<logger>[^-]+) - (?P<message>.*)$'
       - labels:
           level:
-          service:
-          traceId:
-          requestId:
           routingKey:
       - timestamp:
           source: timestamp
           format: '2006-01-02 15:04:05.000'
+          location: Asia/Shanghai

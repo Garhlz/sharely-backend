@@ -18,7 +18,7 @@ const (
 )
 
 // RequestIdMiddleware 统一生成/透传请求标识。
-// 当前系统先把 traceId 和 requestId 统一成同一个值，方便 gateway、Go RPC、Java 和 MQ 日志串起来。
+// 旧 X-Trace-Id 响应头保留兼容；日志 traceId 使用真实 OTel 标识，不与 requestId 混用。
 type RequestIdMiddleware struct{}
 
 func NewRequestIdMiddleware() *RequestIdMiddleware {
@@ -35,7 +35,7 @@ func (m *RequestIdMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		ctx = context.WithValue(ctx, "traceId", requestID)
 		ctx = logx.ContextWithFields(ctx,
 			logx.Field("requestId", requestID),
-			logx.Field("traceId", requestID),
+			logx.Field("traceId", telemetry.TraceID(ctx)),
 		)
 
 		next(w, r.WithContext(ctx))
