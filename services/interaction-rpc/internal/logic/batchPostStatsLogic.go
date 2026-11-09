@@ -44,25 +44,15 @@ func (l *BatchPostStatsLogic) BatchPostStats(in *interaction.BatchPostStatsReque
 	}
 
 	for _, postId := range in.GetPostIds() {
-		// 先按需预热 Redis。
-		// 这里不是每次都无脑查 Mongo，而是先走 Bloom 判断：
-		// 1. Bloom 可用且判断“可能存在互动” -> 尝试预热
-		// 2. Bloom 不可用 -> 保守起见也尝试预热
-		// 3. Bloom 明确判断不存在 -> 跳过预热，直接走 Redis 空值语义
-		if ShouldLoadSetCache(l.ctx, l.svcCtx, postId, postCollectCacheSpec) {
-			if err := EnsurePostCollectCache(l.ctx, l.svcCtx, postId); err != nil {
-				l.Logger.Errorf("ensure post collect cache error: %v", err)
-			}
+		// Ensure 内部先检查 Redis；只有缓存缺失才回源 Mongo，不再经过 Bloom 过滤。
+		if err := EnsurePostCollectCache(l.ctx, l.svcCtx, postId); err != nil {
+			l.Logger.Errorf("ensure post collect cache error: %v", err)
 		}
-		if ShouldLoadSetCache(l.ctx, l.svcCtx, postId, postLikeCacheSpec) {
-			if err := EnsurePostLikeCache(l.ctx, l.svcCtx, postId); err != nil {
-				l.Logger.Errorf("ensure post like cache error: %v", err)
-			}
+		if err := EnsurePostLikeCache(l.ctx, l.svcCtx, postId); err != nil {
+			l.Logger.Errorf("ensure post like cache error: %v", err)
 		}
-		if ShouldLoadHashCache(l.ctx, l.svcCtx, postId, postRateCacheSpec) {
-			if err := EnsurePostRateCache(l.ctx, l.svcCtx, postId); err != nil {
-				l.Logger.Errorf("ensure post rate cache error: %v", err)
-			}
+		if err := EnsurePostRateCache(l.ctx, l.svcCtx, postId); err != nil {
+			l.Logger.Errorf("ensure post rate cache error: %v", err)
 		}
 
 		// 点赞数/收藏数统一从 interaction-rpc 维护的 Redis 集合读取，

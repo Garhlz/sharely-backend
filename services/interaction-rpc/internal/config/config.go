@@ -14,8 +14,7 @@ type Config struct {
 		Path string
 	}
 
-	// 对应 YAML 中的 BizRedis 部分
-	// go-zero 会自动识别 structure 中的 json tag 来进行映射
+	// 兼容 YAML 的 BizRedis 字段；仅复用 go-zero 配置类型，业务使用 go-redis。
 	BizRedis redis.RedisConf
 
 	// 对应 YAML 中的 RabbitMQ 部分

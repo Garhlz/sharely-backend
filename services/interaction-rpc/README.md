@@ -51,7 +51,7 @@ curl -X POST 'http://localhost:8090/api/interaction/like/post' \
   - 避免空 key 被重复回源
 - 短锁预热
   - 减少同 Key 的并发回源，等待超时后仍可能并发加载
-- Lua 原子回填集合与 60 秒 TTL；Bloom 不再用于跳过事实数据查询
+- Lua 原子回填集合与 60 秒 TTL；缓存缺失直接回源，不依赖 Bloom
 
 ### 事件发布
 

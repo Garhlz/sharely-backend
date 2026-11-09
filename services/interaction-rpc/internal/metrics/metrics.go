@@ -11,13 +11,7 @@ import (
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
-// interaction-rpc 的指标重点不是“每个 RPC 调了多少次”，
-// 而是这条 Redis 互动读模型链路是否健康。
-// 所以这里优先暴露：
-// 1. 缓存预热次数与耗时
-// 2. Bloom 检查次数
-// 3. Dummy 占位节点操作次数
-// 4. MQ 发布成功/失败情况
+// 缓存回填与空值占位指标；持久化事件发布由 outbox.go 记录。
 var (
 	// 缓存预热次数，result 用来区分命中 Redis、回源 Mongo、写 Redis 出错等不同结果。
 	cacheWarmTotal = prometheus.NewCounterVec(
@@ -35,14 +29,6 @@ var (
 		},
 		[]string{"kind"},
 	)
-	// Bloom 检查次数，用于看快速判定层是否工作正常。
-	bloomChecksTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "interaction_bloom_checks_total",
-			Help: "Total number of bloom filter checks in interaction-rpc.",
-		},
-		[]string{"kind", "result"},
-	)
 	dummyOpsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "interaction_dummy_ops_total",
@@ -50,23 +36,13 @@ var (
 		},
 		[]string{"kind", "action"},
 	)
-	// MQ 发布结果，用于观察 Redis 实时写成功后，异步事件传播是否稳定。
-	mqPublishTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "interaction_mq_publish_total",
-			Help: "Total number of MQ publish attempts in interaction-rpc.",
-		},
-		[]string{"routing_key", "result"},
-	)
 )
 
 func init() {
 	prometheus.MustRegister(
 		cacheWarmTotal,
 		cacheWarmDuration,
-		bloomChecksTotal,
 		dummyOpsTotal,
-		mqPublishTotal,
 	)
 }
 
@@ -96,14 +72,6 @@ func ObserveCacheWarm(kind, result string, duration time.Duration) {
 	cacheWarmDuration.WithLabelValues(kind).Observe(duration.Seconds())
 }
 
-func IncBloomCheck(kind, result string) {
-	bloomChecksTotal.WithLabelValues(kind, result).Inc()
-}
-
 func IncDummyOp(kind, action string) {
 	dummyOpsTotal.WithLabelValues(kind, action).Inc()
-}
-
-func IncMQPublish(routingKey, result string) {
-	mqPublishTotal.WithLabelValues(routingKey, result).Inc()
 }

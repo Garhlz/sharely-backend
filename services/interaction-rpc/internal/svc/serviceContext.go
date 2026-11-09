@@ -12,7 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// 全称 Service Context。这里面装着所有和第三方组件（Redis、Mongo、MQ）建好的连接
+// 装配 Redis 读缓存与 Mongo 事务写入；MQ 连接由后台 Outbox 发布器管理。
 type ServiceContext struct {
 	Config config.Config
 

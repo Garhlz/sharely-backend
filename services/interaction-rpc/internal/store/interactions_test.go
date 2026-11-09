@@ -79,6 +79,9 @@ func TestMongoTransactions(t *testing.T) {
 	for _, score := range []float64{4, 5} {
 		_, err = s.Apply(ctx, Command{UserID: 1, TargetID: id.Hex(), Kind: "RATE", Score: score})
 		require.NoError(t, err)
+		require.NoError(t, db.Collection("posts").FindOne(ctx, bson.M{"_id": id}).Decode(&post))
+		require.EqualValues(t, 1, post.RatingCount, "changing one user's score must not add a rater")
+		require.Equal(t, score, post.Average)
 	}
 	_, err = s.Apply(ctx, Command{UserID: 2, TargetID: id.Hex(), Kind: "RATE", Score: 3})
 	require.NoError(t, err)
@@ -102,6 +105,34 @@ func TestMongoTransactions(t *testing.T) {
 	}
 	require.NoError(t, db.Collection("posts").FindOne(ctx, bson.M{"_id": id}).Decode(&post))
 	require.EqualValues(t, 8, post.Likes)
+	// 评论点赞迁移后的真实落库、去重和取消；不只断言 Logic 调用了 Writer。
+	commentID := primitive.NewObjectID()
+	_, err = db.Collection("comments").InsertOne(ctx, bson.M{"_id": commentID, "postId": id.Hex(), "userId": 99, "isDeleted": 0, "likeCount": 0})
+	require.NoError(t, err)
+	commentLike := Command{UserID: 1, TargetID: commentID.Hex(), Kind: "COMMENT_LIKE"}
+	changed, err = s.Apply(ctx, commentLike)
+	require.NoError(t, err)
+	require.True(t, changed)
+	changed, err = s.Apply(ctx, commentLike)
+	require.NoError(t, err)
+	require.False(t, changed)
+	n, err = db.Collection("comment_likes").CountDocuments(ctx, bson.M{"userId": 1, "commentId": commentID.Hex()})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+	var comment struct {
+		Likes int64 `bson:"likeCount"`
+	}
+	require.NoError(t, db.Collection("comments").FindOne(ctx, bson.M{"_id": commentID}).Decode(&comment))
+	require.EqualValues(t, 1, comment.Likes)
+	commentLike.Remove = true
+	changed, err = s.Apply(ctx, commentLike)
+	require.NoError(t, err)
+	require.True(t, changed)
+	n, err = db.Collection("comment_likes").CountDocuments(ctx, bson.M{"commentId": commentID.Hex()})
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.NoError(t, db.Collection("comments").FindOne(ctx, bson.M{"_id": commentID}).Decode(&comment))
+	require.Zero(t, comment.Likes)
 	// Mongo 数值比较兼容 int32/int64，已删除目标不能继续产生互动。
 	deletedID := primitive.NewObjectID()
 	_, err = db.Collection("posts").InsertOne(ctx, bson.M{"_id": deletedID, "isDeleted": int64(1)})
