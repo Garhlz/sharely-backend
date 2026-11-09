@@ -1,0 +1,47 @@
+groups:
+  - name: sharely-core
+    rules:
+      - alert: SharelyServiceDown
+        expr: up{job=~"gateway-api|interaction-rpc|notification-rpc|sync-sidecar|user-rpc|search-rpc|comment-rpc|platform-java"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sharely metrics target unavailable"
+          description: "Check process and scrape connectivity before diagnosing business failures."
+      - alert: SharelyOutboxStalled
+        expr: (interaction_outbox_oldest_age_seconds > 120) and (interaction_outbox_pending > 0) and (interaction_outbox_collection_up == 1) and (time() - interaction_outbox_snapshot_timestamp_seconds < 60)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Interaction events have not drained"
+          description: "Check publisher connection, RabbitMQ routing and oldest Outbox document."
+      - alert: SharelyOutboxSnapshotFailed
+        expr: (interaction_outbox_collection_up == 0) or (time() - interaction_outbox_snapshot_timestamp_seconds > 60)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox backlog visibility unavailable"
+      - alert: SharelyConsumerDisconnected
+        expr: ((notification_consumer_up == 0) and (notification_consumer_enabled == 1)) or (sidecar_consumer_up == 0)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An async consumer is not subscribed"
+      - alert: SharelyMessageRejected
+        expr: (sum(increase(notification_consume_total{result="dead_letter"}[5m])) > 0) or (sum(increase(sidecar_consume_total{result="dead_letter"}[5m])) > 0)
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages rejected without requeue"
+          description: "Inspect the configured DLX/DLQ. This counts successful rejection calls, not current queue depth."
+      - alert: SharelyGatewayServerErrors
+        expr: (sum(rate(gateway_http_requests_total{status=~"5.."}[5m])) / sum(rate(gateway_http_requests_total[5m])) > 0.05) and (sum(increase(gateway_http_requests_total[5m])) >= 20)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway 5xx ratio above 5 percent with at least 20 requests"

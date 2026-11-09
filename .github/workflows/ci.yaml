@@ -58,3 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
       - run: PROD_ENV_FILE=./prod.env.example docker compose --env-file deploy/prod.env.example -f deploy/docker-compose.prod.yml config --quiet
+      - name: Validate Prometheus config and alert behavior
+        run: |
+          docker run --rm --network none --entrypoint promtool -v "$PWD/deploy/prometheus:/etc/prometheus:ro" prom/prometheus:latest check config /etc/prometheus/prometheus.yml
+          docker run --rm --network none --entrypoint promtool -v "$PWD/deploy/prometheus:/etc/prometheus:ro" -w /etc/prometheus/tests prom/prometheus:latest test rules sharely.test.yml

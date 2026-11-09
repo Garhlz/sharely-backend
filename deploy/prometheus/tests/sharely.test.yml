@@ -1,0 +1,113 @@
+rule_files:
+  - ../rules/sharely.yml
+evaluation_interval: 15s
+tests:
+  - name: disabled notification consumer does not alert
+    interval: 15s
+    input_series:
+      - series: 'notification_consumer_up{job="notification-rpc",instance="enabled"}'
+        values: '0+0x40'
+      - series: 'notification_consumer_enabled{job="notification-rpc",instance="enabled"}'
+        values: '1+0x40'
+      - series: 'notification_consumer_up{job="notification-rpc",instance="disabled"}'
+        values: '0+0x40'
+      - series: 'notification_consumer_enabled{job="notification-rpc",instance="disabled"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SharelyConsumerDisconnected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: notification-rpc
+              instance: enabled
+            exp_annotations:
+              summary: "An async consumer is not subscribed"
+  - name: message rejection is visible
+    interval: 15s
+    input_series:
+      - series: 'notification_consume_total{result="dead_letter"}'
+        values: '0+0x10 1+0x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SharelyMessageRejected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Messages rejected without requeue"
+              description: "Inspect the configured DLX/DLQ. This counts successful rejection calls, not current queue depth."
+  - name: backlog older than two minutes fires after hold
+    interval: 15s
+    input_series:
+      - series: 'interaction_outbox_pending{job="interaction-rpc",instance="test"}'
+        values: '2+0x40'
+      - series: 'interaction_outbox_oldest_age_seconds{job="interaction-rpc",instance="test"}'
+        values: '0+15x40'
+      - series: 'interaction_outbox_collection_up{job="interaction-rpc",instance="test"}'
+        values: '1+0x40'
+      - series: 'interaction_outbox_snapshot_timestamp_seconds{job="interaction-rpc",instance="test"}'
+        values: '0+15x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SharelyOutboxStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: SharelyOutboxStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: interaction-rpc
+              instance: test
+            exp_annotations:
+              summary: "Interaction events have not drained"
+              description: "Check publisher connection, RabbitMQ routing and oldest Outbox document."
+  - name: stale snapshot does not pretend backlog is current
+    interval: 15s
+    input_series:
+      - series: 'interaction_outbox_pending{job="interaction-rpc",instance="test"}'
+        values: '2+0x40'
+      - series: 'interaction_outbox_oldest_age_seconds{job="interaction-rpc",instance="test"}'
+        values: '300+0x40'
+      - series: 'interaction_outbox_collection_up{job="interaction-rpc",instance="test"}'
+        values: '1+0x40'
+      - series: 'interaction_outbox_snapshot_timestamp_seconds{job="interaction-rpc",instance="test"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SharelyOutboxStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: SharelyOutboxSnapshotFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: interaction-rpc
+              instance: test
+            exp_annotations:
+              summary: "Outbox backlog visibility unavailable"
+  - name: low traffic does not trigger ratio alert
+    interval: 15s
+    input_series:
+      - series: 'gateway_http_requests_total{status="500"}'
+        values: '0+0x1 1+0x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SharelyGatewayServerErrors
+        exp_alerts: []
+  - name: service down
+    interval: 15s
+    input_series:
+      - series: 'up{job="sync-sidecar",instance="test"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SharelyServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sync-sidecar
+              instance: test
+            exp_annotations:
+              summary: "Sharely metrics target unavailable"
+              description: "Check process and scrape connectivity before diagnosing business failures."
